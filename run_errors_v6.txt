@@ -1,0 +1,844 @@
+[0m19:29:44  Running with dbt=1.12.3
+[0m19:29:46  Registered adapter: databricks=1.12.5
+[0m19:29:49  Found 52 models, 2 seeds, 2 operations, 217 data tests, 2 snapshots, 13 sources, 1058 macros
+[0m19:29:49  
+[0m19:29:49  Concurrency: 4 threads (target='dev')
+[0m19:29:49  
+[0m19:30:17  create_masking_policies: no-op on Databricks. Implement via Unity Catalog column masks post-migration.
+[0m19:30:17  1 of 1 START hook: snowflake_demo.on-run-start.0 ............................... [RUN]
+[0m19:30:17  1 of 1 OK hook: snowflake_demo.on-run-start.0 .................................. [[32mOK[0m in 0.03s]
+[0m19:30:17  
+[0m19:30:17  1 of 45 START sql incremental model bronze.exposures ........................... [RUN]
+[0m19:30:17  2 of 45 START sql incremental model bronze.invocations ......................... [RUN]
+[0m19:30:17  3 of 45 START sql incremental model bronze.model_executions .................... [RUN]
+[0m19:30:17  4 of 45 START sql incremental model bronze.models .............................. [RUN]
+[0m19:30:48  3 of 45 OK created sql incremental model bronze.model_executions ............... [[32mOK[0m in 30.93s]
+[0m19:30:48  5 of 45 START sql incremental model bronze.seed_executions ..................... [RUN]
+[0m19:30:48  2 of 45 OK created sql incremental model bronze.invocations .................... [[32mOK[0m in 31.26s]
+[0m19:30:48  6 of 45 START sql incremental model bronze.seeds ............................... [RUN]
+[0m19:30:49  1 of 45 OK created sql incremental model bronze.exposures ...................... [[32mOK[0m in 31.60s]
+[0m19:30:49  7 of 45 START sql incremental model bronze.snapshot_executions ................. [RUN]
+[0m19:30:49  4 of 45 OK created sql incremental model bronze.models ......................... [[32mOK[0m in 31.96s]
+[0m19:30:49  8 of 45 START sql incremental model bronze.snapshots ........................... [RUN]
+[0m19:31:10  7 of 45 OK created sql incremental model bronze.snapshot_executions ............ [[32mOK[0m in 21.64s]
+[0m19:31:10  9 of 45 START sql incremental model bronze.sources ............................. [RUN]
+[0m19:31:13  8 of 45 OK created sql incremental model bronze.snapshots ...................... [[32mOK[0m in 24.03s]
+[0m19:31:13  10 of 45 START sql incremental model bronze.test_executions .................... [RUN]
+[0m19:31:13  5 of 45 OK created sql incremental model bronze.seed_executions ................ [[32mOK[0m in 25.41s]
+[0m19:31:13  11 of 45 START sql incremental model bronze.tests .............................. [RUN]
+[0m19:31:14  6 of 45 OK created sql incremental model bronze.seeds .......................... [[32mOK[0m in 25.45s]
+[0m19:31:14  12 of 45 START sql table model other.q1_fact_pricing_summary_report_query ...... [RUN]
+[0m19:31:30  9 of 45 OK created sql incremental model bronze.sources ........................ [[32mOK[0m in 19.53s]
+[0m19:31:30  13 of 45 START sql table model other.q2_minimum_cost_supplier_query ............ [RUN]
+[0m19:31:32  11 of 45 OK created sql incremental model bronze.tests ......................... [[32mOK[0m in 18.58s]
+[0m19:31:32  14 of 45 START sql table model other.q3_shipping_priority_query ................ [RUN]
+[0m19:31:33  10 of 45 OK created sql incremental model bronze.test_executions ............... [[32mOK[0m in 19.56s]
+[0m19:31:33  15 of 45 START sql table model other.q4_order_priority_checking_query .......... [RUN]
+[0m19:31:34  13 of 45 ERROR creating sql table model other.q2_minimum_cost_supplier_query ... [[31mERROR[0m in 4.06s]
+[0m19:31:34  16 of 45 START python table model silver.async_bulk_operations ................. [RUN]
+[0m19:31:34  [[31mERROR[0m]: Unhandled error while executing target/run/snowflake_demo/models/silver/run/async_bulk_operations.py
+Databricks `http_path` or `cluster_id` of an all-purpose cluster is required for the `all_purpose_cluster` submission method.
+[0m19:31:34  16 of 45 ERROR creating python table model silver.async_bulk_operations ........ [[31mERROR[0m in 0.08s]
+[0m19:31:34  17 of 45 START sql incremental model bronze.customer_cdc_stream ................ [RUN]
+[0m19:31:36  17 of 45 ERROR creating sql incremental model bronze.customer_cdc_stream ....... [[31mERROR[0m in 2.20s]
+[0m19:31:36  18 of 45 START sql incremental model other.dbt_query_history ................... [RUN]
+[0m19:31:41  18 of 45 ERROR creating sql incremental model other.dbt_query_history .......... [[31mERROR[0m in 4.30s]
+[0m19:31:41  19 of 45 START sql table model gold.dim_calendar_day ........................... [RUN]
+[0m19:31:54  15 of 45 OK created sql table model other.q4_order_priority_checking_query ..... [[32mOK[0m in 21.75s]
+[0m19:31:54  20 of 45 START sql table model bronze.stg_customers_with_tests ................. [RUN]
+[0m19:31:58  12 of 45 OK created sql table model other.q1_fact_pricing_summary_report_query . [[32mOK[0m in 44.02s]
+[0m19:31:58  21 of 45 START sql incremental model bronze.stg_orders_incremental ............. [RUN]
+[0m19:31:59  14 of 45 OK created sql table model other.q3_shipping_priority_query ........... [[32mOK[0m in 26.97s]
+[0m19:31:59  22 of 45 SKIP relation other.dynamic_warehouse_assignment ...................... [[33mSKIP[0m]
+[0m19:31:59  23 of 45 START sql table model silver.lkp_exchange_rates ....................... [RUN]
+[0m19:32:03  23 of 45 ERROR creating sql table model silver.lkp_exchange_rates .............. [[31mERROR[0m in 3.73s]
+[0m19:32:03  24 of 45 START sql incremental model silver.clean_nations ...................... [RUN]
+[0m19:32:06  24 of 45 ERROR creating sql incremental model silver.clean_nations ............. [[31mERROR[0m in 3.31s]
+[0m19:32:06  25 of 45 SKIP relation gold.nation_summary ..................................... [[33mSKIP[0m]
+[0m19:32:06  26 of 45 START sql incremental model gold.dim__customers ....................... [RUN]
+[0m19:32:06  sequence_nextval_as_surrogate_key: Snowflake sequence replaced with row_number() + max() on Databricks.
+[0m19:32:09  20 of 45 OK created sql table model bronze.stg_customers_with_tests ............ [[32mOK[0m in 14.42s]
+[0m19:32:09  27 of 45 START sql incremental model gold.dim_customers ........................ [RUN]
+[0m19:32:10  26 of 45 ERROR creating sql incremental model gold.dim__customers .............. [[31mERROR[0m in 4.05s]
+[0m19:32:10  28 of 45 START sql incremental model gold.dim_customers_incremental_macro ...... [RUN]
+[0m19:32:10  sequence_nextval_as_surrogate_key: Snowflake sequence replaced with row_number() + max() on Databricks.
+[0m19:32:11  19 of 45 OK created sql table model gold.dim_calendar_day ...................... [[32mOK[0m in 30.28s]
+[0m19:32:11  29 of 45 START sql table model silver.customer_segments ........................ [RUN]
+[0m19:32:14  28 of 45 ERROR creating sql incremental model gold.dim_customers_incremental_macro  [[31mERROR[0m in 4.17s]
+[0m19:32:14  30 of 45 START sql table model silver.lkp_exchange_rates_legacy ................ [RUN]
+[0m19:32:19  30 of 45 ERROR creating sql table model silver.lkp_exchange_rates_legacy ....... [[31mERROR[0m in 4.71s]
+[0m19:32:21  21 of 45 OK created sql incremental model bronze.stg_orders_incremental ........ [[32mOK[0m in 22.99s]
+[0m19:32:21  31 of 45 START sql streaming_table model silver.order_facts_dynamic ............ [RUN]
+[0m19:32:26  31 of 45 ERROR creating sql streaming_table model silver.order_facts_dynamic ... [[31mERROR[0m in 4.87s]
+[0m19:32:26  32 of 45 SKIP relation gold.executive_dashboard ................................ [[33mSKIP[0m]
+[0m19:32:33  29 of 45 OK created sql table model silver.customer_segments ................... [[32mOK[0m in 22.26s]
+[0m19:32:33  33 of 45 START python table model silver.customer_clustering ................... [RUN]
+[0m19:32:33  34 of 45 SKIP relation gold.customer_insights .................................. [[33mSKIP[0m]
+[0m19:32:33  [[31mERROR[0m]: Unhandled error while executing target/run/snowflake_demo/models/silver/run/customer_clustering.py
+Databricks `http_path` or `cluster_id` of an all-purpose cluster is required for the `all_purpose_cluster` submission method.
+[0m19:32:33  33 of 45 ERROR creating python table model silver.customer_clustering .......... [[31mERROR[0m in 0.05s]
+[0m19:32:40  27 of 45 OK created sql incremental model gold.dim_customers ................... [[32mOK[0m in 30.82s]
+[0m19:32:40  35 of 45 START sql view model gold.dim_customers_share ......................... [RUN]
+[0m19:32:40  36 of 45 START sql incremental model gold.dim__orders .......................... [RUN]
+[0m19:32:40  37 of 45 START sql incremental model gold.dim_customer_changes ................. [RUN]
+[0m19:32:40  38 of 45 START sql incremental model gold.dim_orders ........................... [RUN]
+[0m19:32:40  sequence_get_nextval: Snowflake sequence replaced with row_number() on Databricks.
+[0m19:32:40  sequence_get_nextval: Snowflake sequence replaced with row_number() on Databricks.
+[0m19:32:40  HARD STOP: get_stream called on Databricks. Model requires Delta CDF redesign. See MACRO_ANALYSIS.md Section 4.5.
+[0m19:32:44  37 of 45 ERROR creating sql incremental model gold.dim_customer_changes ........ [[31mERROR[0m in 3.93s]
+[0m19:32:44  39 of 45 START sql incremental model gold.dim_orders_incremental_macro ......... [RUN]
+[0m19:32:44  35 of 45 OK created sql view model gold.dim_customers_share .................... [[32mOK[0m in 4.28s]
+[0m19:32:44  36 of 45 ERROR creating sql incremental model gold.dim__orders ................. [[31mERROR[0m in 4.28s]
+[0m19:32:48  sequence_nextval_as_surrogate_key: Snowflake sequence replaced with row_number() + max() on Databricks.
+[0m19:32:50  39 of 45 ERROR creating sql incremental model gold.dim_orders_incremental_macro  [[31mERROR[0m in 6.70s]
+[0m19:33:23  38 of 45 OK created sql incremental model gold.dim_orders ...................... [[32mOK[0m in 42.81s]
+[0m19:33:23  40 of 45 START sql streaming_table model gold.dim_current_year_orders .......... [RUN]
+[0m19:33:23  41 of 45 SKIP relation gold.fact_order_line_full_reload ........................ [[33mSKIP[0m]
+[0m19:33:23  42 of 45 SKIP relation gold.fct_order_lines .................................... [[33mSKIP[0m]
+[0m19:33:23  43 of 45 SKIP relation gold.fact_order_line_pivot .............................. [[33mSKIP[0m]
+[0m19:33:23  44 of 45 SKIP relation gold.fct_order_lines_by_supplier_month .................. [[33mSKIP[0m]
+[0m19:33:27  40 of 45 ERROR creating sql streaming_table model gold.dim_current_year_orders . [[31mERROR[0m in 4.24s]
+[0m19:33:27  45 of 45 SKIP relation gold.dim_current_year_open_orders ....................... [[33mSKIP[0m]
+[0m19:33:27  
+[0m19:33:27  1 of 1 START hook: snowflake_demo.on-run-end.0 ................................. [RUN]
+[0m19:33:27  1 of 1 OK hook: snowflake_demo.on-run-end.0 .................................... [[32mOK[0m in 0.01s]
+[0m19:33:27  
+[0m19:33:27  Finished running 26 incremental models, 2 project hooks, 2 streaming table models, 16 table models, 1 view model in 0 hours 3 minutes and 38.28 seconds (218.28s).
+[0m19:33:27  
+[0m19:33:27  [31mCompleted with 15 errors, 0 partial successes, and 0 warnings:[0m
+[0m19:33:27  
+[0m19:33:27  [[31mERROR[0m]: in model Q2_MINIMUM_COST_SUPPLIER_QUERY (models/other/tpc_h_benchmarks/Q2_MINIMUM_COST_SUPPLIER_QUERY.sql)
+[0m19:33:27    Database Error in model Q2_MINIMUM_COST_SUPPLIER_QUERY (models/other/tpc_h_benchmarks/Q2_MINIMUM_COST_SUPPLIER_QUERY.sql)
+  
+  [PARSE_SYNTAX_ERROR] Syntax error at or near 'TABLESAMPLE'. SQLSTATE: 42601 (line 49, pos 38)
+  
+  == SQL ==
+  create or replace table `dbt_migration`.`other`.`q2_minimum_cost_supplier_query`
+        
+        
+      using delta
+    
+        
+        
+        
+        
+        
+        
+        comment 'TPC-H Query 2 (Minimum Cost Supplier). Finds the minimum-cost supplier for parts in a region. This implementation samples a single random part and region, then returns the top 100 suppliers by account balance, so it has no stable grain and carries no key test.
+  '
+        
+        as
+        /*
+      dbt Feature Demonstration: TPC-H BENCHMARK QUERY Q2
+  
+      This model demonstrates:
+      - ✅ Official TPC-H Query 2 (Minimum Cost Supplier)
+      - ✅ Complex multi-table joins and subqueries
+      - ✅ Advanced Jinja templating with random sampling
+      - ✅ Window functions and ranking
+      - ✅ Performance benchmarking patterns
+      - ⚠️  INTENTIONAL direct source usage (TPC-H standard requires raw data)
+      - ✅ Complex WHERE clause conditions
+  
+      Complexity: 🥇 RUN (Advanced)
+      Layer: Bronze - Performance Benchmarking
+  
+      NOTE: This query intentionally uses source() directly to match official TPC-H
+      specifications for accurate performance benchmarking.
+  
+      The Minimum Cost Supplier Query finds, in a given region, for each part of a certain type and size, the supplier who
+      can supply it at minimum cost. If several suppliers in that region offer the desired part type and size at the same
+      (minimum) cost, the query lists the parts from suppliers with the 100 highest account balances. For each supplier,
+      the query lists the supplier's account balance, name and nation; the part's number and manufacturer; the supplier's
+      address, phone number and comment information.
+  */
+   
+  select s_acctbal,
+      s_name,
+      n_name,
+      p_partkey,
+      p_mfgr,
+      s_address,
+      s_phone,
+      s_comment
+  from samples.tpch.part AS RANDOM_PART TABLESAMPLE (1 ROWS),
+  --------------------------------------^^^
+      samples.tpch.supplier,
+      samples.tpch.partsupp,
+      samples.tpch.nation,
+      samples.tpch.region AS RANDOM_REGION TABLESAMPLE (1 ROWS)
+  where p_partkey = ps_partkey
+      and s_suppkey = ps_suppkey
+      and p_size = 38
+      and s_nationkey = n_nationkey
+      and n_regionkey = r_regionkey
+      and ps_supplycost = (
+          select min(ps_supplycost)
+          from samples.tpch.partsupp,
+              samples.tpch.supplier,
+              samples.tpch.nation,
+              samples.tpch.region R
+          where p_partkey = ps_partkey
+              and s_suppkey = ps_suppkey
+              and s_nationkey = n_nationkey
+              and n_regionkey = r_regionkey
+              and R.r_name = RANDOM_REGION.r_name
+      )
+  order by s_acctbal desc,
+      n_name,
+      s_name,
+      p_partkey
+  LIMIT 100
+  
+  compiled code at target/run/snowflake_demo/models/other/tpc_h_benchmarks/Q2_MINIMUM_COST_SUPPLIER_QUERY.sql
+[0m19:33:27  
+[0m19:33:27    compiled code at target/compiled/snowflake_demo/models/other/tpc_h_benchmarks/Q2_MINIMUM_COST_SUPPLIER_QUERY.sql
+[0m19:33:27  
+[0m19:33:27  [[31mERROR[0m]: in model async_bulk_operations (models/silver/run/async_bulk_operations.py)
+[0m19:33:27    Databricks `http_path` or `cluster_id` of an all-purpose cluster is required for the `all_purpose_cluster` submission method.
+[0m19:33:27  
+[0m19:33:27    compiled code at target/compiled/snowflake_demo/models/silver/run/async_bulk_operations.py
+[0m19:33:27  
+[0m19:33:27  [[31mERROR[0m]: in model customer_cdc_stream (models/bronze/run/customer_cdc_stream.sql)
+[0m19:33:27    Database Error in model customer_cdc_stream (models/bronze/run/customer_cdc_stream.sql)
+  
+  [PARSE_SYNTAX_ERROR] Syntax error at or near 'stream'. SQLSTATE: 42601 (line 1, pos 5)
+  
+  == SQL ==
+  drop stream if exists dbt_migration.bronze.customer_cdc_stream_ST
+  -----^^^
+  
+[0m19:33:27  
+[0m19:33:27    compiled code at target/compiled/snowflake_demo/models/bronze/run/customer_cdc_stream.sql
+[0m19:33:27  
+[0m19:33:27  [[31mERROR[0m]: in model dbt_query_history (models/other/dbt_query_history.sql)
+[0m19:33:27    Database Error in model dbt_query_history (models/other/dbt_query_history.sql)
+  
+  [PARSE_SYNTAX_ERROR] Syntax error at or near '(': missing ')'. SQLSTATE: 42601 (line 30, pos 12)
+  
+  == SQL ==
+  create or replace table `dbt_migration`.`other`.`dbt_query_history`
+        
+        
+      using delta
+    
+        
+        
+        
+        
+        
+        
+        comment 'dbt query execution history and performance metrics. Demonstrates advanced analytics on dbt metadata. Provides insights into model performance and execution patterns.
+  '
+        
+        as
+        with warehouse_size as
+  (
+      select *, from (
+          values
+          ('X-SMALL', 1, 8),
+          ('SMALL', 2, 16),
+          ('MEDIUM', 4, 32),
+          ('LARGE', 8, 64),
+          ('X-LARGE', 16, 128),
+          ('2X-LARGE', 32, 256),
+          ('3X-LARGE', 64, 512),
+          ('4X-LARGE', 128, 1024),
+          ('5X-LARGE', 256, 2048),
+          ('6X-LARGE', 512, 4096)
+      ) as v1 (warehouse_size, warehouse_nodes, warehouse_vcpu)
+  ------------^^^
+  ), query_history as (
+      select
+      * replace (try_parse_json(query_tag) as query_tag)
+      from table(dbt_migration.information_schema.query_history_by_user(
+          end_time_range_start => dateadd(day, -1, date_trunc(day, current_timestamp())),
+          result_limit => 10000
+      )) qh
+      
+  )
+  select
+      'https://app.snowflake.com/' ||
+          current_organization_name() || '/' || current_account_name() ||
+          '/#/compute/history/queries/' || query_id as query_profile_url,
+      total_elapsed_time/1000 as total_elapsed_sec,
+      upper(query_tag:CAST(target_name AS STRING)) as target_name,
+      try_to_boolean(query_tag:module_details:CAST(is_incremental AS STRING)) as is_incremental,
+      query_tag:CAST(app AS STRING) as app,
+      query_tag:CAST(app_version AS STRING) as app_version,
+      query_tag:CAST(module_name AS STRING) as module_name,
+      query_tag:CAST(module_type AS STRING) as module_type,
+      (compilation_time/1000) as compilation_sec,
+      (execution_time/1000) as execution_sec,
+      nvl( (qh.execution_time/(1000*60*60))*ws.warehouse_nodes, 0) as relative_performance_cost,
+      query_tag:CAST(project_name AS STRING) as project_name,
+      query_tag:CAST(run_id AS STRING) as run_id,
+      query_tag:run_details as run_details,
+      query_tag:CAST(module_id AS STRING) as module_id,
+      query_tag:module_details as module_details,
+      query_tag:module_tags as module_tags,
+      query_tag:CAST(run_started_at AS STRING) as run_started_at,
+      query_tag:CAST(environment_name AS STRING) as environment_name,
+      query_tag:environment_details as environment_details,
+      ws.*,
+      qh.* exclude (warehouse_size)
+  from query_history qh
+  left outer join warehouse_size ws on ws.warehouse_size = upper(qh.warehouse_size)
+  where app = 'dbt'
+  -- Sample Filters:
+  -- AND QUERY_TYPE NOT IN ('ALTER_SESSION', 'DESCRIBE')
+  -- AND MODULE_TYPE IN ('model')
+  -- AND TOTAL_ELAPSED_TIME > 500 -- Only show queries over .5 second
+  
+  compiled code at target/run/snowflake_demo/models/other/dbt_query_history.sql
+[0m19:33:27  
+[0m19:33:27    compiled code at target/compiled/snowflake_demo/models/other/dbt_query_history.sql
+[0m19:33:27  
+[0m19:33:27  [[31mERROR[0m]: in model int_fx_rates__daily (models/silver/run/int_fx_rates__daily.sql)
+[0m19:33:27    Database Error in model int_fx_rates__daily (models/silver/run/int_fx_rates__daily.sql)
+  [TABLE_OR_VIEW_NOT_FOUND] The table or view `cybersyn_financial_economic_essentials`.`cybersyn`.`fx_rates_timeseries` cannot be found. Verify the spelling and correctness of the schema and catalog.
+  Search path: [`system`.`session`, `system`.`builtin`, `system`.`ai`, `dbt_migration`.`bronze`].
+  If you did not qualify the name with a schema, verify the current_schema() output, or qualify the name with the correct schema and catalog.
+  To tolerate the error on drop use DROP VIEW IF EXISTS or DROP TABLE IF EXISTS. SQLSTATE: 42P01; line 25 pos 18
+  compiled code at target/run/snowflake_demo/models/silver/run/int_fx_rates__daily.sql
+[0m19:33:27  
+[0m19:33:27    compiled code at target/compiled/snowflake_demo/models/silver/run/int_fx_rates__daily.sql
+[0m19:33:27  
+[0m19:33:27  [[31mERROR[0m]: in model clean_nations (models/silver/crawl/clean_nations.sql)
+[0m19:33:27    Database Error in model clean_nations (models/silver/crawl/clean_nations.sql)
+  
+  [PARSE_SYNTAX_ERROR] Syntax error at or near '['. SQLSTATE: 42601 (line 74, pos 8)
+  
+  == SQL ==
+  create or replace table `dbt_migration`.`silver`.`clean_nations`
+        
+        
+      using delta
+    
+        
+        
+        
+        
+        
+        
+        comment 'Incremental data cleaning model with AI classification. Demonstrates incremental materialization to optimize AI function calls. Features AI-powered government type classification that runs only once per nation. Optimized for performance and cost efficiency.
+  '
+        
+        as
+        with __dbt__cte__stg_tpc_h__nations as (
+  /*
+      dbt Feature Demonstration: BASIC STAGING MODEL
+  
+      This model demonstrates:
+      - ✅ Staging layer best practices (1:1 with source)
+      - ✅ Ephemeral materialization (inherited from dbt_project.yml)
+      - ✅ Basic column renaming and standardization
+      - ✅ Source function usage
+      - ✅ CTE pattern for readability
+      - ✅ Audit column addition
+  
+      Complexity: 🥉 CRAWL (Beginner)
+      Layer: Bronze - Basic Staging
+  */
+  
+  
+  
+  -- Staging model for TPC-H NATION source
+  -- One-to-one relationship with source, basic cleaning and renaming
+  
+  with source as (
+      select * from samples.tpch.nation
+  ),
+  
+  renamed as (
+      select
+          -- Primary key
+          n_nationkey as nation_key,
+  
+          -- Foreign keys
+          n_regionkey as region_key,
+  
+          -- Attributes
+          n_name as nation_name,
+          n_comment as nation_comment,
+  
+          -- Audit columns
+          current_timestamp() as _loaded_at
+  
+      from source
+  )
+  
+  select * from renamed
+  ) -- SILVER CRAWL: Incremental data cleaning with AI classification
+  -- Complexity: Intermediate - Incremental loading, AI functions, efficiency optimization
+  -- Features demonstrated: Incremental materialization, AI classification, performance optimization
+  
+  select
+      nation_key,
+      upper(trim(nation_name)) as nation_name,
+      region_key,
+      trim(nation_comment) as nation_comment,
+  
+      -- Basic derived fields
+      length(nation_name) as name_length,
+      ai_classify(
+          nation_name,
+          ['FEDERAL', 'REPUBLIC', 'KINGDOM', 'EMPIRE', 'CONFEDERATION', 'UNION', 'FEDERATION', 'PRINCIPALITY', 'DUCHY', 'SULTANATE', 'EMIRATE', 'OTHER']
+  --------^^^
+      ):labels[0] as government_type,
+  
+      current_timestamp() as processed_at
+  
+  from __dbt__cte__stg_tpc_h__nations
+  
+  compiled code at target/run/snowflake_demo/models/silver/crawl/clean_nations.sql
+[0m19:33:27  
+[0m19:33:27    compiled code at target/compiled/snowflake_demo/models/silver/crawl/clean_nations.sql
+[0m19:33:27  
+[0m19:33:27  [[31mERROR[0m]: in model DIM__CUSTOMERS (models/gold/run/incremental_without_macros/DIM__CUSTOMERS.sql)
+[0m19:33:27    Database Error in model DIM__CUSTOMERS (models/gold/run/incremental_without_macros/DIM__CUSTOMERS.sql)
+  
+  [PARSE_SYNTAX_ERROR] Syntax error at or near '('. SQLSTATE: 42601 (line 157, pos 23)
+  
+  == SQL ==
+  create or replace table `dbt_migration`.`gold`.`dim__customers`
+        
+        
+      using delta
+    
+        
+        
+        
+        
+        
+        
+        comment 'Legacy customer dimension with SCD patterns (deprecated - use dim_customers instead)'
+        
+        as
+        /*
+      dbt Feature Demonstration: INCREMENTAL MODEL WITHOUT MACROS
+  
+      This model demonstrates:
+      - ✅ Incremental materialization with SCD Type 2
+      - ✅ Manual SCD implementation (no custom macros)
+      - ✅ Proper staging layer usage (FIXED: was using source directly)
+      - ✅ Advanced Jinja variables
+      - ✅ Hash-based change detection
+      - ✅ Post-hooks for ghost key insertion
+      - ✅ Merge exclude columns for performance
+  
+      Complexity: 🥇 RUN (Advanced)
+      Layer: Gold - Advanced Incremental Patterns
+  */
+  
+  with  __dbt__cte__stg_tpc_h__customers as (
+  
+  
+  -- Staging model for TPC-H CUSTOMER source
+  -- One-to-one relationship with source, basic cleaning and renaming
+  -- Following dbt best practices: each source should have exactly one staging model
+  
+  with source as (
+      select * from samples.tpch.customer
+  ),
+  
+  renamed as (
+      select
+          -- Primary key
+          c_custkey as customer_key,
+  
+          -- Attributes
+          c_name as customer_name,
+          c_address as customer_address,
+          c_nationkey as nation_key,
+          c_phone as customer_phone,
+          c_acctbal as account_balance,
+          c_mktsegment as market_segment,
+          c_comment as customer_comment,
+  
+          -- Audit columns
+          current_timestamp() as _loaded_at
+  
+      from source
+  )
+  
+  select * from renamed
+  ),  __dbt__cte__stg_tpc_h__orders as (
+  
+  
+  -- Staging model for TPC-H ORDERS source
+  -- One-to-one relationship with source, basic cleaning and renaming
+  
+  with source as (
+      select * from samples.tpch.orders
+  ),
+  
+  renamed as (
+      select
+          -- Primary key
+          o_orderkey as order_key,
+  
+          -- Foreign keys
+          o_custkey as customer_key,
+  
+          -- Attributes
+          o_orderstatus as order_status,
+          o_totalprice as total_price,
+          o_orderdate as order_date,
+          o_orderpriority as order_priority,
+          o_clerk as clerk,
+          o_shippriority as ship_priority,
+          o_comment as order_comment,
+  
+          -- Audit columns
+          current_timestamp() as _loaded_at
+  
+      from source
+  )
+  
+  select * from renamed
+  ),  __dbt__cte__LKP_CUSTOMERS_WITH_ORDERS as (
+  /*
+      dbt Feature Demonstration: INTERMEDIATE MODEL - BUSINESS LOGIC
+  
+      This model demonstrates:
+      - ✅ Intermediate layer best practices (business logic isolation)
+      - ✅ Ephemeral materialization for reusable components
+      - ✅ Aggregation functions (COUNT, SUM, MIN, MAX)
+      - ✅ Window functions for analytics
+      - ✅ Model aliasing for backward compatibility
+      - ✅ References to staging models only (no direct sources)
+      - ✅ CTE pattern for complex transformations
+  
+      Complexity: 🥈 WALK (Intermediate)
+      Layer: Silver - Business Logic
+  */
+  
+  
+  
+  -- Intermediate model: Customer order statistics
+  -- Following best practices: intermediate models contain business logic
+  -- This replaces the lookup_customers_with_orders model
+  
+  with customer_orders as (
+      select
+          customer_key,
+          count(*) as order_count,
+          sum(
+              case
+                  when order_status = 'O' then 1
+                  else 0
+              end
+          ) as open_order_count
+      from __dbt__cte__stg_tpc_h__orders
+      group by customer_key
+  )
+  
+  select * from customer_orders
+  ), source_data as (
+  
+      /*
+      All Customers
+      */
+      select
+          c.customer_name,
+          c.customer_address,
+          c.nation_key,
+          c.customer_phone,
+          c.account_balance,
+          c.market_segment,
+          c.customer_comment,
+          case
+              when lkp.order_count > 0 then 'Y'
+              else 'N'
+          end as has_orders_flag,
+          case
+              when lkp.open_order_count > 0 then 'Y'
+              else 'N'
+          end as has_open_orders_flag,
+          c.customer_key,
+          coalesce(c.CAST(customer_key AS STRING), '') as integration_id,
+  -----------------------^^^
+          hash(
+              c.customer_name,
+              c.customer_address,
+              c.nation_key,
+              c.customer_phone,
+              c.account_balance,
+              c.market_segment,
+              c.customer_comment,
+              has_orders_flag,
+              has_open_orders_flag
+          ) as cdc_hash_key
+  
+      from __dbt__cte__stg_tpc_h__customers c
+      left outer join __dbt__cte__lkp_customers_with_orders lkp on (lkp.customer_key = c.customer_key)
+      -- Ideally we would have a filter here to limit changes based on a source table timestamp
+  
+  ),
+  
+  existing_data as (
+  
+      select
+          CAST(null AS INTEGER) customer_surrogate_key,
+          CAST(null AS STRING) integration_id,
+          CAST(null AS INTEGER) cdc_hash_key,
+          CAST(null AS TIMESTAMP) dbt_inserted_ts
+      limit 0
+  
+  ),
+  
+  inserts as (
+      select
+          
+          row_number() OVER (ORDER BY (SELECT NULL)) as customer_surrogate_key
+      ,
+          source_data.*,
+          current_timestamp() as dbt_inserted_ts,
+          current_timestamp() as dbt_updated_ts
+      from source_data
+      left outer join existing_data on source_data.integration_id = existing_data.integration_id
+      where existing_data.integration_id is null
+  ),
+  
+  updates as (
+      select
+          existing_data.customer_surrogate_key,
+          source_data.*,
+          existing_data.dbt_inserted_ts,
+          current_timestamp() as dbt_updated_ts
+      from source_data
+      join existing_data on source_data.integration_id = existing_data.integration_id
+      where source_data.cdc_hash_key != existing_data.cdc_hash_key
+  )
+  
+  select * from inserts
+  union all
+  select * from updates
+  
+  compiled code at target/run/snowflake_demo/models/gold/run/incremental_without_macros/DIM__CUSTOMERS.sql
+[0m19:33:27  
+[0m19:33:27    compiled code at target/compiled/snowflake_demo/models/gold/run/incremental_without_macros/DIM__CUSTOMERS.sql
+[0m19:33:27  
+[0m19:33:27  [[31mERROR[0m]: in model dim_customers_macro_example (models/gold/run/incremental_with_macros/dim_customers_macro_example.sql)
+[0m19:33:27    Database Error in model dim_customers_macro_example (models/gold/run/incremental_with_macros/dim_customers_macro_example.sql)
+  [UNRESOLVED_ROUTINE] Cannot resolve routine `sysdate` on search path [`system`.`session`, `system`.`builtin`, `system`.`ai`, `dbt_migration`.`bronze`].
+  Verify the spelling of `sysdate`, check that the routine exists, and confirm you have `USE` privilege on the catalog and schema, and EXECUTE on the routine. SQLSTATE: 42883; line 182 pos 8
+  compiled code at target/run/snowflake_demo/models/gold/run/incremental_with_macros/dim_customers_macro_example.sql
+[0m19:33:27  
+[0m19:33:27    compiled code at target/compiled/snowflake_demo/models/gold/run/incremental_with_macros/dim_customers_macro_example.sql
+[0m19:33:27  
+[0m19:33:27  [[31mERROR[0m]: in model lookup_exchange_rates (models/silver/walk/lookup_exchange_rates.sql)
+[0m19:33:27    Database Error in model lookup_exchange_rates (models/silver/walk/lookup_exchange_rates.sql)
+  [TABLE_OR_VIEW_NOT_FOUND] The table or view `cybersyn_financial_economic_essentials`.`cybersyn`.`fx_rates_timeseries` cannot be found. Verify the spelling and correctness of the schema and catalog.
+  Search path: [`system`.`session`, `system`.`builtin`, `system`.`ai`, `dbt_migration`.`bronze`].
+  If you did not qualify the name with a schema, verify the current_schema() output, or qualify the name with the correct schema and catalog.
+  To tolerate the error on drop use DROP VIEW IF EXISTS or DROP TABLE IF EXISTS. SQLSTATE: 42P01; line 31 pos 9
+  compiled code at target/run/snowflake_demo/models/silver/walk/lookup_exchange_rates.sql
+[0m19:33:27  
+[0m19:33:27    compiled code at target/compiled/snowflake_demo/models/silver/walk/lookup_exchange_rates.sql
+[0m19:33:27  
+[0m19:33:27  [[31mERROR[0m]: in model order_facts_dynamic (models/silver/run/order_facts_dynamic.sql)
+[0m19:33:27    Database Error in model order_facts_dynamic (models/silver/run/order_facts_dynamic.sql)
+  [STREAMING_TABLE_QUERY_INVALID] Streaming table `dbt_migration`.`silver`.`order_facts_dynamic` can only be created from a streaming query. Please add the STREAM keyword to your FROM clause to turn this relation into a streaming query. SQLSTATE: 42000
+  compiled code at target/run/snowflake_demo/models/silver/run/order_facts_dynamic.sql
+[0m19:33:27  
+[0m19:33:27    compiled code at target/compiled/snowflake_demo/models/silver/run/order_facts_dynamic.sql
+[0m19:33:27  
+[0m19:33:27  [[31mERROR[0m]: in model customer_clustering (models/silver/run/customer_clustering.py)
+[0m19:33:27    Databricks `http_path` or `cluster_id` of an all-purpose cluster is required for the `all_purpose_cluster` submission method.
+[0m19:33:27  
+[0m19:33:27    compiled code at target/compiled/snowflake_demo/models/silver/run/customer_clustering.py
+[0m19:33:27  
+[0m19:33:27  [[31mERROR[0m]: in model dim_customer_changes (models/gold/walk/dim_customer_changes.sql)
+[0m19:33:27    Database Error in model dim_customer_changes (models/gold/walk/dim_customer_changes.sql)
+  
+  [PARSE_SYNTAX_ERROR] Syntax error at or near '$'. SQLSTATE: 42601 (line 19, pos 16)
+  
+  == SQL ==
+  create or replace table `dbt_migration`.`gold`.`dim_customer_changes`
+        
+        
+      using delta
+    
+        
+        
+        
+        
+        
+        
+        comment 'Customer change tracking model. Demonstrates change data capture patterns. Shows how to track customer attribute changes over time. Append-only by design: log_id comes from a sequence and the source is a stream, so there is no merge key and none should be added.
+  '
+        
+        as
+        select
+      row_number() OVER (ORDER BY (SELECT NULL)) as log_id,
+      d.*,
+      iff(metadata$action = 'DELETE', 'Y', 'N') as delete_flag
+  ----------------^^^
+  from
+      `dbt_migration`.`gold`.`dim_customers` as d
+  
+  -- We do not want the DELETE rows from the stream for updates
+  where not (metadata$action = 'DELETE' and metadata$isupdate)
+  
+  -- It is possible the same key was deleted and inserted
+  -- The following will deduplicate records, keeping the newest record and keeping INSERT over DELETE
+  qualify 1 = row_number() over (partition by customer_key order by _updated_at desc, metadata$action desc)
+  
+  compiled code at target/run/snowflake_demo/models/gold/walk/dim_customer_changes.sql
+[0m19:33:27  
+[0m19:33:27    compiled code at target/compiled/snowflake_demo/models/gold/walk/dim_customer_changes.sql
+[0m19:33:27  
+[0m19:33:27  [[31mERROR[0m]: in model DIM__ORDERS (models/gold/run/incremental_without_macros/DIM__ORDERS.sql)
+[0m19:33:27    Database Error in model DIM__ORDERS (models/gold/run/incremental_without_macros/DIM__ORDERS.sql)
+  
+  [PARSE_SYNTAX_ERROR] Syntax error at or near '('. SQLSTATE: 42601 (line 65, pos 23)
+  
+  == SQL ==
+  create or replace table `dbt_migration`.`gold`.`dim__orders`
+        
+        
+      using delta
+    
+        
+        
+        
+        
+        
+        
+        comment 'Legacy orders dimension with SCD patterns (deprecated - use dim_orders instead)'
+        
+        as
+        with  __dbt__cte__stg_tpc_h__orders as (
+  
+  
+  -- Staging model for TPC-H ORDERS source
+  -- One-to-one relationship with source, basic cleaning and renaming
+  
+  with source as (
+      select * from samples.tpch.orders
+  ),
+  
+  renamed as (
+      select
+          -- Primary key
+          o_orderkey as order_key,
+  
+          -- Foreign keys
+          o_custkey as customer_key,
+  
+          -- Attributes
+          o_orderstatus as order_status,
+          o_totalprice as total_price,
+          o_orderdate as order_date,
+          o_orderpriority as order_priority,
+          o_clerk as clerk,
+          o_shippriority as ship_priority,
+          o_comment as order_comment,
+  
+          -- Audit columns
+          current_timestamp() as _loaded_at
+  
+      from source
+  )
+  
+  select * from renamed
+  ), source_data as (
+  
+      /*
+          Simulate a query for the sales orders
+      */
+      select
+          coalesce(c.customer_key, 0) as customer_key,
+          o.order_status,
+          o.total_price,
+          o.order_date,
+          o.order_priority,
+          o.clerk,
+          o.ship_priority,
+          o.order_comment,
+          o.customer_key as order_customer_key,
+          o.order_key,
+          coalesce(o.CAST(order_key AS STRING), '') as integration_id,
+  -----------------------^^^
+          hash(
+              coalesce(c.customer_key, 0),
+              o.order_status,
+              o.total_price,
+              o.order_date,
+              o.order_priority,
+              o.clerk,
+              o.ship_priority,
+              o.order_comment,
+              o.customer_key
+          ) as cdc_hash_key
+      from
+          __dbt__cte__stg_tpc_h__orders o
+      left outer join `dbt_migration`.`gold`.`dim_customers` c on c.customer_key = o.customer_key
+  
+  
+  ),
+  
+  existing_data as (
+  
+      select
+          CAST(null AS INTEGER) order_surrogate_key,
+          CAST(null AS STRING) integration_id,
+          CAST(null AS INTEGER) cdc_hash_key,
+          CAST(null AS TIMESTAMP) dbt_inserted_ts
+      limit 0
+  
+  ),
+  
+  inserts as (
+      select
+          row_number() OVER (ORDER BY (SELECT NULL)) as order_surrogate_key,
+          source_data.*,
+          current_timestamp() as dbt_inserted_ts,
+          current_timestamp() as dbt_updated_ts
+      from source_data
+      left outer join existing_data on source_data.integration_id = existing_data.integration_id
+      where existing_data.integration_id is null
+  ),
+  
+  updates as (
+      select
+          existing_data.order_surrogate_key,
+          source_data.*,
+          existing_data.dbt_inserted_ts,
+          current_timestamp() as dbt_updated_ts
+      from source_data
+      join existing_data on source_data.integration_id = existing_data.integration_id
+      where source_data.cdc_hash_key != existing_data.cdc_hash_key
+  )
+  
+  select * from inserts
+  union all
+  select * from updates
+  
+  compiled code at target/run/snowflake_demo/models/gold/run/incremental_without_macros/DIM__ORDERS.sql
+[0m19:33:27  
+[0m19:33:27    compiled code at target/compiled/snowflake_demo/models/gold/run/incremental_without_macros/DIM__ORDERS.sql
+[0m19:33:27  
+[0m19:33:27  [[31mERROR[0m]: in model dim_orders_macro_example (models/gold/run/incremental_with_macros/dim_orders_macro_example.sql)
+[0m19:33:27    Database Error in model dim_orders_macro_example (models/gold/run/incremental_with_macros/dim_orders_macro_example.sql)
+  [UNRESOLVED_ROUTINE] Cannot resolve routine `sysdate` on search path [`system`.`session`, `system`.`builtin`, `system`.`ai`, `dbt_migration`.`bronze`].
+  Verify the spelling of `sysdate`, check that the routine exists, and confirm you have `USE` privilege on the catalog and schema, and EXECUTE on the routine. SQLSTATE: 42883; line 71 pos 8
+  compiled code at target/run/snowflake_demo/models/gold/run/incremental_with_macros/dim_orders_macro_example.sql
+[0m19:33:27  
+[0m19:33:27    compiled code at target/compiled/snowflake_demo/models/gold/run/incremental_with_macros/dim_orders_macro_example.sql
+[0m19:33:27  
+[0m19:33:27  [[31mERROR[0m]: in model dim_current_year_orders (models/gold/crawl/dim_current_year_orders.sql)
+[0m19:33:27    Database Error in model dim_current_year_orders (models/gold/crawl/dim_current_year_orders.sql)
+  
+  [UNSUPPORTED_DATATYPE] Unsupported data type "NUMBER". SQLSTATE: 0A000
+  == SQL (line 5, position 19) ==
+        `order_key` number COMMENT 'Primary key for order'...
+                    ^^^^^^
+  
+  compiled code at target/run/snowflake_demo/models/gold/crawl/dim_current_year_orders.sql
+[0m19:33:27  
+[0m19:33:27    compiled code at target/compiled/snowflake_demo/models/gold/crawl/dim_current_year_orders.sql
+[0m19:33:27  
+[0m19:33:27  Done. PASS=23 WARN=0 ERROR=15 SKIP=9 NO-OP=0 REUSED=0 TOTAL=47

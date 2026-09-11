@@ -1,0 +1,7 @@
+[0m09:45:04  Running with dbt=1.12.3
+[0m09:45:05  Registered adapter: databricks=1.12.5
+[0m09:45:07  Found 52 models, 2 seeds, 2 operations, 217 data tests, 2 snapshots, 13 sources, 1049 macros
+[0m09:45:07  
+[0m09:45:07  Concurrency: 4 threads (target='dev')
+[0m09:45:07  
+[0m09:45:32  create_masking_policies: no-op on Databricks. Implement via Unity Catalog column masks post-migration.
