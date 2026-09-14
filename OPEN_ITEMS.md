@@ -36,10 +36,10 @@ Updated as items are resolved or new ones surface.
 | 2 | Snapshot + incremental MERGE strategy testing | 🔴 Open | No | Not covered in sample project |
 | 3 | `get_stream` macro → Delta CDF architectural decision | 🟢 Resolved (2026-09-14) | — | Tested Delta CDF redesign built and validated live against the real warehouse — see `CHECKPOINT.md` "Advisory-then-apply workflow" section and `MACRO_ANALYSIS.md` Section 4.5. Not auto-applied — surfaced as a Diagnostician recommendation, applied via explicit `cli.py apply-fix`. |
 | 4 | `streaming_table` STREAM keyword requirement | 🟢 Resolved (2026-09-12) | — | `dynamic_table` maps to `materialized_view`, not `streaming_table` — Streaming Tables reject aggregation and self-referencing correlated subqueries, which is exactly what real Snowflake `dynamic_table` usage commonly contains. Auto-applied (category 13, validated safe mechanical fix). See `MACRO_ANALYSIS.md` Section 4.6. |
-| 5 | `dbt_utils` macros not yet tested through Lakebridge | 🔴 Open | Yes | `generate_surrogate_key`, `star`, `union_relations` — not confirmed exercised in this project |
-| 6 | Custom materializations testing | 🔴 Open | No | If any exist in official repo |
+| 5 | `dbt_utils` macros not yet tested through Lakebridge | 🟡 Parked | Partial | `dbt_utils.star` — 🟢 confirmed working, `dim_orders_macro_example` transpiles and passes using it. `generate_surrogate_key`/`union_relations` are not used anywhere in this sample project — untestable here, only relevant against a real client repo. |
+| 6 | Custom materializations testing | 🔴 Open | No | One found in this sample project (`result_scan_table`, Snowflake-only, disabled via `.sql.new`) — see note under Jinja Constructs table below. No active custom materialization to test here; open only for whatever the official repo turns out to have. |
 | 7 | Nested macros testing through Lakebridge | 🟡 Parked | No | |
-| 8 | Mock staging data for `STAGING` source | 🔴 Open | Yes — unblocks SCD model testing | `CUSTOMER` and `SALESORDER` tables needed |
+| 8 | Mock staging data for `STAGING` source | 🟢 Resolved (moot) | No | Checked: zero models in this project actually call `source('STAGING', ...)` — Data Loader's own `unused`-source classification already correctly catches both `CUSTOMER` and `SALESORDER` (confirmed in `dbt_migration.audit.source_load`: `strategy=unused, status=skipped`). No SCD model in this sample project is actually blocked by it — mock data was never needed here. |
 
 ---
 
@@ -54,11 +54,21 @@ Updated as items are resolved or new ones surface.
 | `{% for item in list %}` | 🟡 Medium | ✅ Validated |
 | `{% set x = ... %}` | 🟡 Medium | ✅ Validated |
 | `{{ var('variable_name') }}` | 🟡 Medium | ✅ Validated |
-| `dbt_utils` macros | 🔴 High | 🔴 Open |
-| Custom materializations | 🔴 High | 🔴 Open |
-| Nested macros | 🟡 Medium | 🔴 Open |
-| Incremental MERGE strategy | 🟡 Medium | 🔴 Open |
-| `{%- -%}` whitespace control | 🟡 Medium | 🔴 Open |
+| `dbt_utils` macros | 🔴 High | 🟡 Partial — `star` ✅ validated, others unused in this project |
+| Custom materializations | 🔴 High | 🔴 Open — see note below |
+| Nested macros | 🟡 Medium | 🟡 Not present in this project (checked; only a false-positive Jinja variable named `integration_key`, no macro actually calls another custom macro from within its body) |
+| Incremental MERGE strategy | 🟡 Medium | ✅ Validated — 11 models use `materialized='incremental'` with `unique_key`, including the new CDF-based `dim_customer_changes`/`customer_cdc_stream` |
+| `{%- -%}` whitespace control | 🟡 Medium | ✅ Validated — used extensively throughout (dispatch macros, config blocks), all compile/run correctly |
+
+**Custom materializations note (2026-09-14):** exactly one exists in this project —
+`macros/snowflake_result_scan_table_materialization.sql.new` (`{% materialization
+result_scan_table, adapter='snowflake' %}`, wrapping Snowflake's `RESULT_SCAN()` to use
+stored-procedure/SHOW/DESCRIBE output in DDL). It's disabled via the `.sql.new` extension
+(dbt only reads `.sql`), so it's genuinely inert here — not exercised, no Databricks
+equivalent exists for `RESULT_SCAN()` (same class of problem as Streams — architectural, not
+syntax). Stays Open only in the sense that a real client repo could have an *active* custom
+materialization that would need this same architectural-redesign treatment; nothing further
+to test against this sample project.
 
 ---
 

@@ -28,8 +28,23 @@ def ensure_workspace_copy(
     fixes accumulated by earlier agent runs are preserved across the
     pipeline. Pass `reset=True` to discard the copy and start over from the
     current state of `source_path`.
+
+    Real bug found 2026-09-14: a wrong/stale `source_path` (e.g. a typo'd
+    relative path from the wrong cwd) went completely undetected all session
+    for most agents, since they only ever touch the cached workspace copy —
+    the existing-target short-circuit below never re-checks that `source`
+    itself is still valid once `target` already exists. Only Transpiler,
+    which reads Lakebridge input directly from `source_path` (by design — see
+    its own module docstring), ever surfaced it, as a silent zero-file no-op.
+    Fail loud here instead: every other agent should get the same clear
+    error a first-time caller would, not a quietly-reused stale copy.
     """
     source = Path(source_path).resolve()
+    if not source.exists():
+        raise FileNotFoundError(
+            f"project_path does not exist: {source} — check the path is relative to your "
+            f"current working directory (or pass an absolute path)"
+        )
     root = Path(workspace_root).resolve()
     target = root / source.name
 

@@ -18,13 +18,33 @@ Steps:
   2. Parse target/run_results.json + target/manifest.json for per-model
      pass/fail/blocked status (blocked = skipped because an upstream model
      failed, per dbt's own skip message — distinct from a genuine failure)
-  3. Write results to the existing dbt_migration.audit.model_runs table
-  4. Generate a human-readable Excel report via scripts/dbt_report.py
-     (parses the same two artifacts) and save it to dbt-migration-agent/reports/
+  3. Generate a human-readable Excel report via scripts/dbt_report.py
+     (parses the same two artifacts, model-only by design — see below) and
+     save it to dbt-migration-agent/reports/
+  4. If snapshots/ exists and has any .sql files, also run `dbt snapshot`
+     (2026-09-14 — see transpiler.py's module docstring for why snapshots are
+     in scope at all) and parse its own results the same way. `dbt run` and
+     `dbt snapshot` are separate commands that each overwrite the whole
+     target/run_results.json, so this snapshots/restores it around the
+     snapshot step — same pattern already used in Diagnostician/Validator's
+     own targeted `--select` calls, so nothing downstream that reads
+     run_results.json expecting `dbt run`'s state sees anything different.
+  5. Write ALL results (models + snapshots) to the existing
+     dbt_migration.audit.model_runs table — no schema change needed, a
+     snapshot's manifest node carries the same name/fqn/depends_on shape a
+     model's does. The Excel report itself stays model-only (scripts/
+     dbt_report.py is a user-provided script, reused as-is, never scoped to
+     snapshots).
 
-Failure behavior: never hard-stops the pipeline — a failed model is reported,
-not fatal to the run. The failed-model list is returned for Diagnostician
-(Agent 7, not yet built) to consume once it exists.
+Note: a failing/blocked snapshot is NOT currently picked up by Diagnostician
+for auto-fix — its read_failed_models() only looks at `model.`-prefixed
+manifest nodes. A failing snapshot still lands in the human review queue
+(cli.py status), just without an auto-fix attempt. Extending Diagnostician
+to snapshots wasn't part of this scope — see CHECKPOINT.md.
+
+Failure behavior: never hard-stops the pipeline — a failed model or snapshot
+is reported, not fatal to the run. The failed-model list is returned for
+Diagnostician (Agent 7) to consume.
 """
 
 from __future__ import annotations
@@ -106,17 +126,43 @@ class ExecutorAgent:
             return False, str(e)
         return proc.returncode == 0, (proc.stdout + proc.stderr)[-6000:]
 
-    def parse_run_results(self) -> list[ModelRunResult]:
+    def run_dbt_snapshot(self) -> tuple[bool, str]:
+        try:
+            proc = subprocess.run(
+                [
+                    "dbt", "snapshot", "--no-fail-fast", "--threads", str(self.threads),
+                    "--project-dir", str(self.project_path), "--target", self.dbt_target,
+                ],
+                capture_output=True, text=True, timeout=1800,
+            )
+        except (FileNotFoundError, subprocess.TimeoutExpired) as e:
+            return False, str(e)
+        return proc.returncode == 0, (proc.stdout + proc.stderr)[-6000:]
+
+    def read_raw_results(self, node_prefix: str) -> list[dict]:
+        """Reads whatever's currently in target/run_results.json, filtered to
+        nodes of one type (`model.` or `snapshot.`). `dbt run` and `dbt
+        snapshot` are separate commands that each overwrite the whole file —
+        call this immediately after the matching command, before the other
+        one runs."""
         run_results_path = self.project_path / "target" / "run_results.json"
-        manifest_path = self.project_path / "target" / "manifest.json"
         if not run_results_path.exists():
             return []
-
         rr = json.loads(run_results_path.read_text())
+        return [r for r in rr.get("results", []) if r.get("unique_id", "").startswith(node_prefix)]
+
+    def build_results(self, raw_results: list[dict]) -> list[ModelRunResult]:
+        """Turns raw dbt result dicts (from one or more read_raw_results()
+        calls, models and snapshots merged) into ModelRunResult rows. Merging
+        before this step — rather than processing each node type in
+        isolation — matters for blocked_by_upstream: a snapshot can depend on
+        a model (this project has one that does), so the dependency-status
+        lookup needs visibility across both node types to detect that
+        correctly, not just skipped-because-of-another-skipped-snapshot."""
+        manifest_path = self.project_path / "target" / "manifest.json"
         manifest = json.loads(manifest_path.read_text()) if manifest_path.exists() else {}
         nodes = manifest.get("nodes", {})
 
-        model_results = [r for r in rr.get("results", []) if r.get("unique_id", "").startswith("model.")]
         # dbt's run_results.json doesn't populate `message` for skipped nodes (confirmed:
         # always empty) — checking it for "upstream" always returned False, silently
         # defeating this column's whole purpose. Derive it from the real dependency graph
@@ -124,10 +170,10 @@ class ExecutorAgent:
         # didn't succeed. This naturally cascades through multi-level chains too, since a
         # dependency that was itself skipped-due-to-its-own-upstream already carries a
         # non-"success" status here.
-        status_by_uid = {r["unique_id"]: r.get("status") for r in model_results}
+        status_by_uid = {r["unique_id"]: r.get("status") for r in raw_results}
 
         results = []
-        for r in model_results:
+        for r in raw_results:
             uid = r["unique_id"]
             node = nodes.get(uid, {})
             fqn = node.get("fqn", [])
@@ -192,17 +238,40 @@ class ExecutorAgent:
     def run(self) -> ExecutorReport:
         run_id = str(uuid.uuid4())
         dbt_run_ok, _log = self.run_dbt()
-        results = self.parse_run_results()
+        model_raw = self.read_raw_results("model.")
+
+        # Excel report is model-only by design (scripts/dbt_report.py, a
+        # user-provided script reused as-is, was never scoped to snapshots) —
+        # generate it now, from `dbt run`'s own run_results.json, before
+        # `dbt snapshot` (below) overwrites that file with its own results.
+        report_path = self.generate_report(run_id)
+
+        snapshot_raw: list[dict] = []
+        dbt_snapshot_ok = True
+        snapshots_dir = self.project_path / "snapshots"
+        if snapshots_dir.exists() and any(snapshots_dir.rglob("*.sql")):
+            # dbt snapshot is a separate command that overwrites the whole
+            # run_results.json with just its own results — same corruption
+            # risk already documented/handled in Diagnostician/Validator's own
+            # targeted `--select` calls. Snapshot and restore so run_results.json
+            # keeps reflecting `dbt run`'s state afterward, since Diagnostician
+            # and Validator both read it expecting exactly that.
+            run_results_path = self.project_path / "target" / "run_results.json"
+            backup = run_results_path.read_text() if run_results_path.exists() else None
+            dbt_snapshot_ok, _log2 = self.run_dbt_snapshot()
+            snapshot_raw = self.read_raw_results("snapshot.")
+            if backup is not None:
+                run_results_path.write_text(backup)
+
+        results = self.build_results(model_raw + snapshot_raw)
 
         try:
             self.write_audit(results, run_id)
         except (StatementError, DatabricksError) as e:
             print(f"[warn] could not write to audit table: {e}", file=sys.stderr)
 
-        report_path = self.generate_report(run_id)
-
         return ExecutorReport(
-            run_id=run_id, dbt_run_ok=dbt_run_ok, results=results,
+            run_id=run_id, dbt_run_ok=dbt_run_ok and dbt_snapshot_ok, results=results,
             report_path=str(report_path) if report_path else None,
         )
 

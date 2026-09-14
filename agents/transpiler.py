@@ -43,6 +43,13 @@ Steps:
   6. Run `dbt compile` for bulk error detection
   7. Report the error list (Diagnostician Agent isn't built yet — returned/printed)
 
+Also runs the identical pipeline (steps 2-6) over snapshots/ if it exists and
+has any .sql files (2026-09-14 — AGENT_DESIGN.md never scoped snapshots in
+originally; found live, tested, and wired in as a real gap, not assumed).
+The only difference: a snapshot's dbt-visible node name is declared inside
+the file itself (`{% snapshot NAME %}`), not implied by the filename the way
+a model's is — see SNAPSHOT_NAME_RE / ModelTranspileResult.audit_name.
+
 Failure behavior: soft fail — a broken/uncertain file is flagged and skipped,
 the rest of the run continues.
 """
@@ -88,6 +95,12 @@ CONFIG_KWARG_REMOVE_PATTERNS = [
     (re.compile(r"^[ \t]*transient\s*=\s*false\s*,?[ \t]*\n?", re.MULTILINE | re.IGNORECASE), "transient=false config"),
 ]
 MATERIALIZED_DYNAMIC_TABLE_RE = re.compile(r"materialized\s*=\s*(['\"])dynamic_table\1")
+# A snapshot file's dbt-visible node name is declared inside the tag itself
+# (`{% snapshot NAME %}`) and is not required to match the filename — unlike
+# models, where dbt enforces filename == model name. Extracted from the raw
+# source (unaffected by transpilation) to keep Transpiler's own audit rows
+# aligned with what Executor's manifest-derived rows will call the same node.
+SNAPSHOT_NAME_RE = re.compile(r"\{%-?\s*snapshot\s+(\w+)\s*-?%\}")
 VARCHAR_SIZE_RE = re.compile(r"\bVARCHAR\(\d+\)", re.IGNORECASE)
 ALTER_SESSION_RE = re.compile(r"ALTER\s+SESSION\s+SET\s+(WEEK_START|WEEK_OF_YEAR_POLICY)\s*=\s*\d+\s*;?", re.IGNORECASE)
 USE_WAREHOUSE_RE = re.compile(r"\bUSE\s+WAREHOUSE\s+\S+\s*;?", re.IGNORECASE)
@@ -234,6 +247,13 @@ class ModelTranspileResult:
     fixes_applied: list[str]
     requires_human_review: bool
     notes: str
+    # Set only for snapshots: the dbt-visible node name declared inside
+    # `{% snapshot NAME %}`, which is NOT necessarily the file's stem (unlike
+    # models, where dbt requires filename == model name). Executor's own
+    # audit rows key on this same manifest-derived `name`, so write_audit()
+    # must match it exactly or Transpiler/Executor rows for the same node
+    # would silently disagree. None for models, where the stem is correct.
+    audit_name: str | None = None
 
 
 @dataclass
@@ -270,46 +290,52 @@ class TranspilerAgent:
         self.output_dir = OUTPUT_ROOT / self.project_path.name
         self.client = None
 
-    def transpile(self) -> TranspilerReport:
-        run_id = str(uuid.uuid4())
-        # Always transpile from the untouched ORIGINAL source, never from the workspace
-        # copy's models/ — Transpiler itself is the only agent that writes there, so a
-        # second run would otherwise re-feed its own prior output back into Lakebridge
-        # as if it were raw Snowflake SQL (confirmed: causes real corruption on rerun).
-        source_models_dir = self.source_path / "models"
-        workspace_models_dir = self.project_path / "models"
-        sql_files = sorted(p for p in source_models_dir.rglob("*.sql"))
-        py_files = sorted(p for p in source_models_dir.rglob("*.py"))
+    def _transpile_directory(
+        self, source_dir: Path, workspace_dir: Path, output_subdir: str, is_snapshot: bool = False,
+    ) -> list[ModelTranspileResult]:
+        """Runs Lakebridge + the post-processor + all 4 corruption detectors over
+        every .sql file in source_dir, writing results to both output_databricks/
+        and the workspace copy. Shared by models/ and snapshots/ — the only
+        difference is is_snapshot, which controls how the audit-table name is
+        derived (declared `{% snapshot NAME %}` name vs. filename stem)."""
+        sql_files = sorted(p for p in source_dir.rglob("*.sql"))
+        py_files = sorted(p for p in source_dir.rglob("*.py"))
 
         results: list[ModelTranspileResult] = []
         for p in py_files:
             results.append(ModelTranspileResult(
-                str(p.relative_to(source_models_dir)), "skipped", [], False,
+                str(p.relative_to(source_dir)), "skipped", [], False,
                 "Python dbt model — not a SQL transpilation target",
             ))
 
-        lakebridge_out = self.output_dir / "_lakebridge_raw"
+        lakebridge_out = self.output_dir / f"_lakebridge_raw_{output_subdir}"
         if lakebridge_out.exists():
             shutil.rmtree(lakebridge_out)
         lakebridge_out.parent.mkdir(parents=True, exist_ok=True)  # Lakebridge needs the parent to pre-exist
-        lakebridge_log = run_lakebridge(source_models_dir, lakebridge_out, self.profile, self.source_dialect)
+        lakebridge_log = run_lakebridge(source_dir, lakebridge_out, self.profile, self.source_dialect)
 
         def write_result(rel: Path, content: str) -> None:
             """Writes to both output_databricks/ (artifact) and the workspace copy
             (what dbt compile/run actually sees) — kept in lockstep always, so the
             workspace never carries stale content from a previous Transpiler run.
             """
-            dest = self.output_dir / "models" / rel
+            dest = self.output_dir / output_subdir / rel
             dest.parent.mkdir(parents=True, exist_ok=True)
             dest.write_text(content)
-            ws_dest = workspace_models_dir / rel
+            ws_dest = workspace_dir / rel
             ws_dest.parent.mkdir(parents=True, exist_ok=True)
             ws_dest.write_text(content)
 
         for sql_file in sql_files:
-            rel = sql_file.relative_to(source_models_dir)
+            rel = sql_file.relative_to(source_dir)
             raw_sql = sql_file.read_text()
             lb_file = lakebridge_out / rel
+            # The declared snapshot name doesn't change through transpilation —
+            # extract from raw source once, reused for every result below.
+            audit_name = None
+            if is_snapshot:
+                m = SNAPSHOT_NAME_RE.search(raw_sql)
+                audit_name = m.group(1) if m else None
 
             if has_multiple_statements(raw_sql):
                 write_result(rel, raw_sql)
@@ -317,6 +343,7 @@ class TranspilerAgent:
                     str(rel), "manual_review", [], True,
                     "file appears to contain multiple top-level statements — "
                     "per-statement split/transpile is not implemented, review manually",
+                    audit_name,
                 ))
                 continue
 
@@ -327,7 +354,7 @@ class TranspilerAgent:
                     "Lakebridge did not produce output for this file (parsing/analysis error)",
                 )
                 results.append(ModelTranspileResult(
-                    str(rel), "manual_review", [], True, error_line,
+                    str(rel), "manual_review", [], True, error_line, audit_name,
                 ))
                 continue
 
@@ -341,6 +368,7 @@ class TranspilerAgent:
                     "(likely a Jinja expression used as a value inside an unusual SQL "
                     "clause, e.g. a PIVOT IN(...) list) — kept original raw SQL, needs "
                     "manual transpilation",
+                    audit_name,
                 ))
                 continue
 
@@ -352,6 +380,7 @@ class TranspilerAgent:
                     "error' comment — a silent internal failure not caught by exit code "
                     "or file-existence checks. Kept original raw SQL, needs manual "
                     "transpilation.",
+                    audit_name,
                 ))
                 continue
 
@@ -364,6 +393,7 @@ class TranspilerAgent:
                     f"{', '.join(dropped_ctes)} (body was pure Jinja control flow) while "
                     "keeping references to it — kept original raw SQL, needs manual "
                     "transpilation.",
+                    audit_name,
                 ))
                 continue
 
@@ -373,13 +403,38 @@ class TranspilerAgent:
 
             if manual_flags:
                 results.append(ModelTranspileResult(
-                    str(rel), "manual_review", fixes, True, "; ".join(manual_flags),
+                    str(rel), "manual_review", fixes, True, "; ".join(manual_flags), audit_name,
                 ))
             else:
                 results.append(ModelTranspileResult(
                     str(rel), "success", fixes, False,
                     "; ".join(fixes) if fixes else "no post-processor fixes needed",
+                    audit_name,
                 ))
+
+        return results
+
+    def transpile(self) -> TranspilerReport:
+        run_id = str(uuid.uuid4())
+        # Always transpile from the untouched ORIGINAL source, never from the workspace
+        # copy's models/ — Transpiler itself is the only agent that writes there, so a
+        # second run would otherwise re-feed its own prior output back into Lakebridge
+        # as if it were raw Snowflake SQL (confirmed: causes real corruption on rerun).
+        source_models_dir = self.source_path / "models"
+        workspace_models_dir = self.project_path / "models"
+        results = self._transpile_directory(source_models_dir, workspace_models_dir, "models")
+
+        # Snapshots are optional — most client projects won't have any — and use
+        # the identical Lakebridge + post-processor + corruption-detector pipeline
+        # as models/. Only real difference: a snapshot's dbt-visible name is
+        # declared inside the file (`{% snapshot NAME %}`), not implied by the
+        # filename, so _transpile_directory tracks that separately (audit_name).
+        source_snapshots_dir = self.source_path / "snapshots"
+        if source_snapshots_dir.exists() and any(source_snapshots_dir.rglob("*.sql")):
+            workspace_snapshots_dir = self.project_path / "snapshots"
+            results += self._transpile_directory(
+                source_snapshots_dir, workspace_snapshots_dir, "snapshots", is_snapshot=True,
+            )
 
         try:
             self.write_audit(results, run_id)
@@ -411,7 +466,7 @@ class TranspilerAgent:
 
         rows_sql = []
         for r in results:
-            model_name = Path(r.model_path).stem
+            model_name = r.audit_name or Path(r.model_path).stem
             rows_sql.append("(" + ", ".join([
                 f"'{esc(model_name)}'", f"'{esc(r.status)}'",
                 str(r.requires_human_review).upper(), f"'{esc(self.developer)}'",
