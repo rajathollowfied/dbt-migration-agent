@@ -244,9 +244,85 @@ ALTER TABLE my_table SET TBLPROPERTIES (delta.enableChangeDataFeed = true);
 SELECT * FROM table_changes('my_table', startingVersion, endingVersion);
 ```
 
-**Agent action:** Hard stop — CDF is architecturally different from Streams.
-Models using streams need redesign, not just syntax replacement.
-**Validated:** ✅ Hard stop message logged correctly — `get_stream` dispatch stub working.
+**Agent action — two-tier, confirmed with user (2026-09-14):**
+1. **Macro Resolver (compile-time, always runs):** generates the usual
+   `adapter.dispatch()` scaffold with a hard-stop stub body for
+   `databricks__get_stream` — this is only what's needed to make the project
+   *parse and compile*, not a functional fix. No auto-apply decision to make
+   here; every macro gets a stub, known or not.
+2. **Diagnostician (run-time, advisory-only):** once a model actually fails
+   with a stream-shaped error (category 4, `stream_error` — `SHOW STREAMS`,
+   `metadata$...`, `near 'stream'`), Diagnostician does **not** auto-apply a
+   fix, unlike most other auto-fixable categories. CDF is a genuine
+   architectural swap — different runtime semantics (CDF's own watermark
+   tracking vs. a Stream's auto-advancing offset), not a one-line syntax
+   substitution — so per the explicit user decision, it's surfaced as a
+   **recommendation** in `attempted_fix` / `pattern_library`
+   (`source='recommended'`, `times_applied=0`) and only written to disk when
+   the user explicitly runs `cli.py apply-fix <model>` (a future Streamlit UI
+   button will call `DiagnosticianAgent.apply_recommended_fix()` directly).
+   This is distinct from `streaming_table_error` (Section 4.6 below), which
+   stays on auto-apply since it's a validated one-line materialization swap
+   with no semantic change.
+
+**The tested CDF pattern (`agents/diagnostician.py`'s `apply_stream_cdf_pattern`),
+validated live against the real warehouse (2026-09-14):**
+
+- **`databricks__get_stream(table, stream_name)`** is rewritten (not stubbed)
+  to return an inline subquery reading `table_changes()` off `table`, with:
+  - **Zero SQL changes required in any consuming model.** Every consumer
+    already does `SELECT ..., stream_alias.*, ...` — the macro emits the
+    real base-table columns (introspected via
+    `adapter.get_columns_in_relation`) plus three synthetic columns:
+    `` `metadata$action` `` (mapped from CDF's `_change_type`:
+    `insert`/`update_postimage` → `INSERT`, `delete`/`update_preimage` →
+    `DELETE` — this exactly reproduces a standard-mode Snowflake stream's own
+    pre/post-image-as-delete/insert-pair behavior), `` `metadata$isupdate` ``
+    (true for both `update_preimage`/`update_postimage`), and
+    `source_commit_version` (CDF's own `_commit_version`, passed straight
+    through as the watermark).
+  - **Self-tracking watermark, no external control table.** Because
+    `source_commit_version` is a normal passthrough column, it lands in the
+    consumer's own table automatically. The next incremental run reads it
+    back with `SELECT MAX(source_commit_version) FROM {{ this }}` — resolved
+    via `run_query()` to a literal *before* being interpolated into
+    `table_changes()`, since Databricks requires that function's starting
+    version to be a constant, not a subquery
+    (`DELTA_CDC_NON_CONSTANT_ARGUMENT` — a real error hit and fixed during
+    testing).
+  - **Idempotent CDF enablement.** The macro runs
+    `ALTER TABLE ... SET TBLPROPERTIES (delta.enableChangeDataFeed = true)`
+    unconditionally on every invocation guarded by `execute and flags.WHICH
+    in ('run', 'build')` — setting an already-true property is a harmless
+    no-op, so no producer model needs to be hand-edited to opt in.
+  - **First run avoids `table_changes()` entirely.** CDF only tracks changes
+    from the version it was enabled at forward — querying `table_changes(t,
+    0)` on a table that already had rows before CDF was turned on fails.
+    So `is_incremental() == false` instead snapshots the table directly as
+    all-`INSERT` rows (mirrors Snowflake's `SHOW_INITIAL_ROWS = TRUE`) and
+    seeds the watermark from the table's *current* version via a small
+    `get_current_delta_version()` helper macro (`DESCRIBE HISTORY ... LIMIT
+    1`) — not `0`.
+  - **No-op runs are safe.** Verified live: re-running with a
+    `start_version` past the latest available commit (nothing changed since
+    last run) returns zero rows rather than erroring.
+- **Producer models that were hand-rolling their own Snowflake
+  `create/drop stream` DDL directly (not through `get_stream()`)** — e.g.
+  this project's `customer_cdc_stream.sql`, which had a `pre_hook`/`post_hook`
+  pair literally emitting `create stream if not exists ...` /
+  `drop stream if exists ...` (a hard `PARSE_SYNTAX_ERROR` on Databricks, no
+  macro involved at all) — get those hooks stripped and
+  `tblproperties={'delta.enableChangeDataFeed': 'true'}` added to their
+  `config()` instead, making them a valid `table_changes()` source for any
+  future consumer.
+
+**Validated end-to-end against the real warehouse:** initial load (750,000
+rows, watermark seeded correctly), a real incremental batch (one `UPDATE` +
+one `DELETE` on the source table → exactly one `INSERT`-with-`isupdate=true`
+row and one `DELETE` row appeared, `update_preimage` correctly excluded,
+watermark advanced), and a subsequent no-op run (zero new rows, no error).
+`customer_cdc_stream.sql`'s own hook fix verified separately — builds cleanly
+on Databricks now.
 
 ---
 

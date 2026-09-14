@@ -78,6 +78,9 @@ HELP_TEXT = """dbt Migration Agent — commands
   /dbt-migrate:diagnose    Agent 7 — classify + auto-fix failed models
   /dbt-migrate:validate    Agent 8 — schema/row-count/checksum/business-rule checks
   /dbt-migrate:status      Current run status from the audit tables
+  /dbt-migrate:apply-fix   Apply a Diagnostician *recommendation* (advisory-only
+                           hard-stop categories, e.g. stream_error) that was
+                           surfaced but not auto-applied — explicit opt-in
   /dbt-migrate:help        This message
 
 Every command takes a project_path plus the shared flags (--profile,
@@ -258,6 +261,22 @@ def run_full_pipeline(args: argparse.Namespace) -> int:
     return 0
 
 
+def run_apply_fix(args: argparse.Namespace) -> int:
+    """Explicit, user-triggered apply for a Diagnostician recommendation.
+    diagnose_one() never writes these fixes to disk on its own — it only logs
+    a `source='recommended'` pattern_library row and points here. This is the
+    interim CLI trigger for that "advise first, apply second" workflow (a
+    future UI would call DiagnosticianAgent.apply_recommended_fix directly)."""
+    agent = DiagnosticianAgent(
+        project_path=args.project_path, profile=args.profile, catalog=args.catalog,
+        warehouse_id=args.warehouse_id, dbt_target=args.dbt_target,
+        developer=args.developer or get_git_branch(args.project_path) or "unknown",
+    )
+    ok, message = agent.apply_recommended_fix(args.model_name)
+    print(f"[{'APPLIED' if ok else 'FAILED'}] {args.model_name}: {message}")
+    return 0 if ok else 1
+
+
 def run_status(args: argparse.Namespace) -> int:
     client = get_client(args.profile)
     from agents.common.db import execute_sql as _exec
@@ -326,6 +345,12 @@ def main() -> int:
     status_p.add_argument("--catalog", default="dbt_migration")
     status_p.add_argument("--warehouse-id", default="b05480be6edc2be5")
 
+    apply_fix_p = sub.add_parser(
+        "apply-fix", help="Apply a Diagnostician recommendation (advisory-only categories)",
+    )
+    add_common(apply_fix_p)
+    apply_fix_p.add_argument("model_name")
+
     sub.add_parser("help", help="List commands")
 
     for name in AGENT_MODULES:
@@ -340,6 +365,8 @@ def main() -> int:
         return run_full_pipeline(args)
     if args.command == "status":
         return run_status(args)
+    if args.command == "apply-fix":
+        return run_apply_fix(args)
     if args.command in AGENT_MODULES:
         return run_agent_command(args.command, remainder)
 

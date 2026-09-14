@@ -138,6 +138,182 @@ def apply_deterministic_fix(category_name: str, sql: str) -> tuple[str, str]:
 
 
 # ---------------------------------------------------------------------------
+# Recommended (advisory-only) fixes — genuinely architectural hard-stop
+# categories where a real, tested solution exists but should NOT be applied
+# automatically (confirmed with user 2026-09-14: unlike streaming_table_error,
+# which stays on auto-apply since it's a validated one-line materialization
+# swap, an architectural redesign like the Streams->CDF pattern below touches
+# multiple files and changes runtime semantics enough that the user wants to
+# see and explicitly approve it first). diagnose_one() surfaces these as a
+# recommendation in `attempted_fix` (fix_successful stays False, still routes
+# to human review) and logs a `source='recommended'` row to pattern_library;
+# nothing on disk changes until `DiagnosticianAgent.apply_recommended_fix()`
+# is invoked explicitly (cli.py's `apply-fix <model>` command).
+#
+# Only categories with an actual code-level tested fix get an entry here.
+# python_cluster_error/missing_source_data have no code fix at all (compute
+# config / absent source data) so they're intentionally left out — those stay
+# exactly as today: flagged, no recommendation to show.
+# ---------------------------------------------------------------------------
+
+_DATABRICKS_GET_STREAM_RE = re.compile(
+    r"\{%-\s*macro\s+databricks__get_stream\(.*?\{%-\s*endmacro\s*-%\}", re.DOTALL,
+)
+
+_DATABRICKS_GET_STREAM_CDF_BODY = '''{%- macro databricks__get_stream(table, stream_name=none) -%}
+    {#-
+        Databricks: Delta Change Data Feed (CDF) replaces Snowflake Streams.
+        See MACRO_ANALYSIS.md Section 4.5 for the full pattern write-up.
+
+        A Snowflake stream auto-tracks row changes and auto-advances its own
+        offset once consumed. Delta CDF instead exposes ALL historical
+        changes via table_changes(), keyed by commit version -- the consumer
+        must track its own watermark. This is done with zero SQL changes on
+        the consuming model: we emit an extra `source_commit_version`
+        passthrough column, every consumer already does `stream_alias.*`, so
+        it flows straight through into the consumer's own table, and the
+        next incremental run reads it back via MAX(source_commit_version)
+        FROM {{ this }}.
+    -#}
+    {%- if execute and flags.WHICH in ('run', 'build') -%}
+        {%- do run_query("ALTER TABLE " ~ table ~ " SET TBLPROPERTIES (delta.enableChangeDataFeed = true)") -%}
+    {%- endif -%}
+    {%- set base_columns = [] -%}
+    {%- if execute -%}
+        {%- for col in adapter.get_columns_in_relation(table) -%}
+            {%- do base_columns.append('src.`' ~ col.name ~ '`') -%}
+        {%- endfor -%}
+    {%- endif -%}
+    {%- if is_incremental() -%}
+    {#- table_changes()'s starting-version argument must be a literal constant,
+        not a subquery (DELTA_CDC_NON_CONSTANT_ARGUMENT) -- resolve the
+        watermark to a literal here, at macro-execution time. -#}
+    {%- set start_version = 0 -%}
+    {%- if execute -%}
+        {%- set watermark_result = run_query("SELECT COALESCE(MAX(source_commit_version), 0) AS v FROM " ~ this) -%}
+        {%- set start_version = watermark_result.columns['v'].values()[0] + 1 -%}
+    {%- endif -%}
+    (
+        SELECT
+            {{ base_columns | join(',\\n            ') }}{% if base_columns %},{% endif %}
+            CASE src.`_change_type`
+                WHEN 'delete' THEN 'DELETE'
+                WHEN 'update_preimage' THEN 'DELETE'
+                ELSE 'INSERT'
+            END AS `metadata$action`,
+            src.`_change_type` IN ('update_preimage', 'update_postimage') AS `metadata$isupdate`,
+            src.`_commit_version` AS source_commit_version
+        FROM table_changes('{{ table }}', {{ start_version }}) AS src
+        WHERE src.`_change_type` != 'update_preimage'
+    )
+    {%- else -%}
+    (
+        -- Initial load: snapshot the table as inserts (mirrors Snowflake's
+        -- SHOW_INITIAL_ROWS=TRUE), then track CDF from here forward. Reading
+        -- table_changes() from version 0 would fail once CDF was enabled
+        -- after the table already had history, so the first load doesn't
+        -- use table_changes() at all -- it starts the watermark at the
+        -- table's current version instead.
+        SELECT
+            {{ base_columns | join(',\\n            ') }}{% if base_columns %},{% endif %}
+            'INSERT' AS `metadata$action`,
+            false AS `metadata$isupdate`,
+            {{ get_current_delta_version(table) if execute else 0 }} AS source_commit_version
+        FROM {{ table }} AS src
+    )
+    {%- endif -%}
+{%- endmacro -%}'''
+
+_GET_CURRENT_DELTA_VERSION_MACRO = '''{%- macro get_current_delta_version(relation) -%}
+    {#- DESCRIBE HISTORY returns most-recent-operation-first with no ORDER BY
+        needed; it isn't composable inside a SELECT ... FROM (...) subquery,
+        so LIMIT 1 on the bare command is the correct/only way to get the
+        table's current version. -#}
+    {%- set result = run_query("DESCRIBE HISTORY " ~ relation ~ " LIMIT 1") -%}
+    {{ return(result.columns['version'].values()[0] if execute else 0) }}
+{%- endmacro -%}'''
+
+
+def _apply_stream_cdf_macro(project_path: Path) -> str | None:
+    macro_path = project_path / "macros" / "snowflake_get_stream.sql"
+    if not macro_path.exists():
+        return None
+    content = macro_path.read_text()
+    new_content = _DATABRICKS_GET_STREAM_RE.sub(_DATABRICKS_GET_STREAM_CDF_BODY, content)
+    if new_content == content:
+        return None
+    if "macro get_current_delta_version" not in new_content:
+        new_content = new_content.rstrip() + "\n\n" + _GET_CURRENT_DELTA_VERSION_MACRO + "\n"
+    macro_path.write_text(new_content)
+    return str(macro_path.relative_to(project_path))
+
+
+_STREAM_HOOK_KWARG_RE = re.compile(
+    r"\s*(pre_hook|post_hook)\s*=\s*\[[^\]]*\bstream\b[^\]]*\]\s*,?", re.IGNORECASE | re.DOTALL,
+)
+
+
+def _apply_stream_cdf_producer_model(rel_path: str, project_path: Path) -> str | None:
+    """Removes invalid `create/drop stream` pre_hook/post_hook DDL (no
+    Databricks equivalent) from a model that was hand-rolling its own stream,
+    and enables CDF on it via tblproperties so it's a valid table_changes()
+    source for any consumer using the CDF-based get_stream() above."""
+    model_path = project_path / rel_path
+    if not model_path.exists():
+        return None
+    content = model_path.read_text()
+    new_content = _STREAM_HOOK_KWARG_RE.sub("", content)
+    if new_content == content:
+        return None
+    # Removing the last kwarg in a config(...) call can leave a dangling
+    # trailing comma right before the closing `) }}` — harmless to Jinja's
+    # Python-like call parsing, but clean it up for readability.
+    new_content = re.sub(r",(\s*)\)(\s*\}\})", r"\1)\2", new_content)
+    if "tblproperties" not in new_content:
+        new_content = re.sub(
+            r"\{\{\s*config\(",
+            "{{ config(\n    tblproperties={'delta.enableChangeDataFeed': 'true'},",
+            new_content, count=1,
+        )
+    model_path.write_text(new_content)
+    return str(model_path.relative_to(project_path))
+
+
+def apply_stream_cdf_pattern(project_path: Path) -> list[str]:
+    """The tested Streams->CDF fix (see class comment above). Touches the
+    shared get_stream macro plus any model in this project still hand-rolling
+    a Snowflake `create/drop stream` hook directly. Returns the list of files
+    actually changed (empty if everything was already applied)."""
+    changed = []
+    macro_change = _apply_stream_cdf_macro(project_path)
+    if macro_change:
+        changed.append(macro_change)
+    for rel_path in ("models/bronze/run/customer_cdc_stream.sql",):
+        model_change = _apply_stream_cdf_producer_model(rel_path, project_path)
+        if model_change:
+            changed.append(model_change)
+    return changed
+
+
+RECOMMENDED_FIXES: dict[str, dict] = {
+    "stream_error": {
+        "title": "Snowflake Streams -> Delta Change Data Feed (CDF)",
+        "summary": (
+            "databricks__get_stream now reads table_changes() from the source "
+            "table instead of stubbing out, remapping _change_type to "
+            "metadata$action/metadata$isupdate and tracking its own watermark "
+            "via a passthrough source_commit_version column -- zero SQL "
+            "changes needed in any consuming model. Also removes the invalid "
+            "Snowflake create/drop-stream hooks from customer_cdc_stream.sql "
+            "and enables CDF on it. Tested against the real warehouse. "
+            "See MACRO_ANALYSIS.md Section 4.5."
+        ),
+        "apply": apply_stream_cdf_pattern,
+    },
+}
+
+
+# ---------------------------------------------------------------------------
 # LLM fallback
 # ---------------------------------------------------------------------------
 
@@ -273,8 +449,16 @@ class DiagnosticianAgent:
         cat_id, cat_name, auto_fixable, llm_eligible = classify_error(error_message)
 
         if not auto_fixable and not llm_eligible:
+            recommendation = RECOMMENDED_FIXES.get(cat_name)
+            attempted_fix = ""
+            if recommendation:
+                attempted_fix = (
+                    f"RECOMMENDED (not applied): {recommendation['title']} — "
+                    f"run `cli.py apply-fix {model_name}` to apply. {recommendation['summary']}"
+                )
+                self.record_pattern(cat_name, attempted_fix, "recommended")
             return DiagnosisResult(
-                model_name, cat_id, cat_name, "", False, 0, error_message,
+                model_name, cat_id, cat_name, attempted_fix, False, 0, error_message,
                 requires_human_review=True,
             )
 
@@ -332,16 +516,50 @@ class DiagnosticianAgent:
             def esc(s: str) -> str:
                 return s.replace("'", "''")
 
+            # A recommendation that hasn't been applied yet is logged with
+            # times_applied=0 — visible in the audit trail as advice, not
+            # conflated with a fix that actually ran (source='recommended'
+            # only pairs with a genuine fix here since RECOMMENDED_FIXES is
+            # advisory-only; every other source means a fix actually ran).
+            times_applied = 0 if source == "recommended" else 1
             stmt = (
                 f"INSERT INTO {self.catalog}.audit.pattern_library "
                 "(pattern_id, error_category, regex_pattern, fix_template, source, "
                 "times_applied, last_applied, created_at, created_by) VALUES ("
                 f"'{uuid.uuid4()}', '{esc(category)}', '', '{esc(fix_template[:2000])}', "
-                f"'{esc(source)}', 1, TIMESTAMP'{now}', TIMESTAMP'{now}', '{esc(self.developer)}')"
+                f"'{esc(source)}', {times_applied}, TIMESTAMP'{now}', TIMESTAMP'{now}', '{esc(self.developer)}')"
             )
             execute_sql(self.client, self.warehouse_id, stmt, catalog=self.catalog, schema="audit")
         except (StatementError, DatabricksError) as e:
             print(f"[warn] could not write pattern_library: {e}", file=sys.stderr)
+
+    def apply_recommended_fix(self, model_name: str) -> tuple[bool, str]:
+        """Explicit, user-triggered counterpart to the advisory recommendation
+        surfaced by diagnose_one() above — actually writes the tested fix to
+        disk and re-verifies. Never called automatically."""
+        failed = self.read_failed_models()
+        match = next((f for f in failed if f[0] == model_name), None)
+        if not match:
+            return False, (
+                f"{model_name} not found among the last run's failures — "
+                "run `cli.py execute` then `cli.py diagnose` first"
+            )
+        _, _, error_message = match
+        _, cat_name, _, _ = classify_error(error_message)
+        fix = RECOMMENDED_FIXES.get(cat_name)
+        if not fix:
+            return False, f"no tested recommended fix registered for category '{cat_name}' ({model_name})"
+
+        changed_files = fix["apply"](self.project_path)
+        status = f"changed: {', '.join(changed_files)}" if changed_files else "already applied, re-verifying"
+
+        ok, new_error = self.run_single_model(model_name)
+        self.record_pattern(
+            cat_name, f"APPLIED: {fix['title']} ({status})", "recommended_applied_by_user",
+        )
+        if ok:
+            return True, f"{model_name} now passes. {status}"
+        return False, f"{model_name} still fails after applying fix ({status}): {new_error}"
 
     def write_audit(self, results: list[DiagnosisResult], run_id: str) -> None:
         if not results:
