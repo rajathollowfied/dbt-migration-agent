@@ -120,11 +120,29 @@ Failure produces broken SQL: `table.CAST(column AS STRING)` instead of `CAST(tab
 ### 4.3 Data Types in yml files
 | Snowflake | Databricks |
 |-----------|------------|
-| `data_type: number` | `data_type: bigint` |
+| `data_type: number` | `data_type: decimal(38,10)` |
 | `data_type: varchar` | `data_type: string` |
 | `data_type: timestamp_ntz` | `data_type: timestamp` |
 
 **Note:** `timestamp_ntz` in yml resolves to `Undefined` tag value — causes parse error.
+
+**Corrected 2026-09-14 — `number` must NOT map to `bigint`.** Originally documented as
+`bigint`; confirmed via a real failure this is wrong and can silently corrupt or break a
+build. A bare `data_type: number` (no precision/scale) doesn't say whether the underlying
+Snowflake column is truly integer-only or a decimal/currency value — `NUMBER` is used for
+both. Real case found: `total_price` columns (`gold._models.yml`) got mapped to `bigint`,
+but the actual built columns are `DECIMAL(18,2)`. This went unnoticed for most
+materializations (`table`/`incremental` infer their schema from the query, ignoring the yml
+doc), but `dbt-databricks`'s `materialized_view` materialization emits an *explicit*
+column-type DDL sourced from the yml docs — the wrong `bigint` declaration then conflicts
+with the real `DECIMAL` data at creation time: `[DELTA_MERGE_INCOMPATIBLE_DATATYPE] Failed
+to merge incompatible data types LongType and DecimalType(18,2)`, with no column name in
+the error message. `decimal(38,10)` is a safe superset — genuinely-integer columns lose
+nothing by being decimal-typed instead, so this direction is always safe; the reverse
+(decimal data forced into `bigint`) is not. Other currency/rate-like columns across this
+project (`account_balance`, `extended_price`, `discount`, `tax`, `exchange_rate`, etc.)
+likely have the same latent doc error, but haven't caused a build failure since they're not
+used in a `materialized_view` model — not exhaustively swept, flagged for follow-up.
 
 ### 4.4 Sampling
 | Snowflake | Databricks |

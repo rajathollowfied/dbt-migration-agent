@@ -568,7 +568,19 @@ def fix_packages_yml(text: str) -> tuple[str, list[str]]:
 # yml data_type fixes
 # ---------------------------------------------------------------------------
 
-DATA_TYPE_MAP = {"number": "bigint", "varchar": "string", "timestamp_ntz": "timestamp"}
+DATA_TYPE_MAP = {"number": "decimal(38,10)", "varchar": "string", "timestamp_ntz": "timestamp"}
+# Not `bigint`: confirmed this causes real, silent failures. A bare `data_type:
+# number` (no precision/scale) in a Snowflake yml doc doesn't say whether the
+# underlying column is truly integer-only or a decimal/currency value — and
+# Snowflake's NUMBER is used for both. Found this the hard way: `total_price`
+# columns were mapped to `bigint`, but the actual built columns are
+# DECIMAL(18,2). dbt-databricks's `materialized_view` materialization emits an
+# EXPLICIT column-type DDL sourced from these yml docs (unlike table/
+# incremental, which infer types from the query) — the wrong `bigint`
+# declaration then conflicts with the real DECIMAL data at creation time
+# (DELTA_MERGE_INCOMPATIBLE_DATATYPE), a failure that only surfaces for
+# materialized views, not other materializations. `decimal(38,10)` is a safe
+# superset for genuinely-integer columns too (no precision lost either way).
 DATA_TYPE_RE = re.compile(r"^(\s*data_type:\s*)(number|varchar|timestamp_ntz)(\s*)$", re.IGNORECASE)
 
 
