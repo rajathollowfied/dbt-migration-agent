@@ -358,6 +358,68 @@ Snowflake-only system table, none available in this sandbox). Blocked=5 is
 the Cybersyn cascade through `fct_order_lines` and its 3 downstream
 consumers.
 
+## `data_type: bigint` blast-radius investigation (2026-09-14)
+
+Before bulk-fixing the ~93 remaining `data_type: bigint` occurrences flagged
+as a follow-up above, checked whether they're actually causing malformed
+values (precision/scale corruption) or are inert documentation, per explicit
+user request: "if it is causing malformed values... fixed everywhere. If the
+underlying data isn't affected at all, then just notify."
+
+**Confirmed the mechanism precisely:** no `contract: enforced` exists
+anywhere in this project; `dbt-databricks` only emits explicit column-type
+DDL sourced from yml docs for `materialized_view`/`dynamic_table`
+materializations (everything else infers its schema from the query and
+ignores the yml doc); Validator's schema check only verifies documented
+column *names* are present, never types, and its checksum/row-count checks
+run against the real physical table's real values. **Result: ~90 of the ~93
+occurrences are confirmed inert** — no functional impact today. Only two
+models in this project use `materialized_view`/`dynamic_table` at all:
+`dim_current_year_orders` (already fixed) and `order_facts_dynamic`.
+
+**`order_facts_dynamic` was a second, dormant landmine.** Its entire yml
+`columns:` block is commented out (collateral damage from the
+`dbt_constraints` over-commenting bug), so its `total_order_value: bigint`
+mislabel was inert — but would immediately reproduce the same class of
+failure the moment that block is reactivated. Verified by temporarily
+reactivating it in the workspace copy only and running `dbt run
+--full-refresh`, then fixing forward through what surfaced — **two
+independent failure modes, not just one**, both confirmed live:
+1. `order_date` (computed via `DATE_TRUNC('DAY', o_orderdate)`) was
+   documented as `date`, but Databricks/Spark SQL's `DATE_TRUNC()` **always
+   returns `TIMESTAMP`**, never `DATE` (confirmed via `typeof()`) — a second,
+   independent Snowflake→Databricks dialect difference, unrelated to the
+   bigint bug.
+2. `total_order_value` (computed via `SUM(o_totalprice)` on a
+   `decimal(18,2)` source) needed `decimal(28,2)`, not `decimal(18,2)` —
+   Spark SQL's `SUM()` aggregate **widens decimal precision by +10** (capped
+   at 38), confirmed via `typeof()`. Matching the source column's own
+   precision isn't sufficient once it passes through an aggregate.
+
+Fixed both (workspace copy and the still-commented original source), then
+reverted the block back to its original commented state (reactivating it
+wasn't requested — that's the separate, already-known `dbt_constraints`
+over-commenting issue). Full write-up with error messages in `FINDINGS.md`
+Section 4.3.
+
+**For the remaining ~90 inert occurrences** (genuinely decimal-but-mislabeled
+columns confirmed via the real TPC-H source schema — `account_balance`,
+`extended_price`, `discount`, `tax`, `exchange_rate`,
+`avg_discount_rate`/`total_extended_price` and more) — per the user's own
+rule, these are **noted, not bulk-fixed**, since the underlying data isn't
+affected. Documented as a watch-list in `FINDINGS.md` Section 4.3: relevant
+again only if any of these models is ever converted to
+`materialized_view`/`dynamic_table`, or if model contracts are adopted.
+
+`OPEN_ITEMS.md` reconciled against actual current state (it predates the
+8-agent build and had several items marked open that are now resolved —
+`get_stream`→CDF, `streaming_table`→`materialized_view`) — see its Resolution
+Log for the full list.
+
+Re-ran the full pipeline (`cli.py execute` then `cli.py validate`) afterward
+to get a validation pass on the two newly-fixed models — check the latest
+run for actual current numbers rather than assuming here.
+
 ## How to apply
 
 Before building the next agent, re-read this file plus the relevant

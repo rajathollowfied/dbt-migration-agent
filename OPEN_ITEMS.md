@@ -32,11 +32,11 @@ Updated as items are resolved or new ones surface.
 
 | # | Item | Status | Blocking | Notes |
 |---|------|--------|---------|-------|
-| 1 | `dbt_constraints` → native dbt contracts | 🔴 Open | Yes — Macro Resolver Agent automates this | 43 refs across 6 files |
+| 1 | `dbt_constraints` → native dbt contracts | 🟡 Parked | No — deactivation unblocks builds | Macro Resolver comments out live `dbt_constraints.*` test blocks and downgrades the package (block-aware, doesn't touch siblings) — this **deactivates** the constraint tests so builds succeed, it does not migrate them to native dbt contracts (`contract: enforced`). No contracts exist anywhere in this project. True native-contract migration is still open if ever needed. |
 | 2 | Snapshot + incremental MERGE strategy testing | 🔴 Open | No | Not covered in sample project |
-| 3 | `get_stream` macro → Delta CDF architectural decision | 🔴 Open | Yes — blocks stream models | Hard stop in agent |
-| 4 | `streaming_table` STREAM keyword requirement | 🔴 Open | No — architectural per model | `dynamic_table` → `streaming_table` not sufficient |
-| 5 | `dbt_utils` macros not yet tested through Lakebridge | 🔴 Open | Yes | `generate_surrogate_key`, `star`, `union_relations` |
+| 3 | `get_stream` macro → Delta CDF architectural decision | 🟢 Resolved (2026-09-14) | — | Tested Delta CDF redesign built and validated live against the real warehouse — see `CHECKPOINT.md` "Advisory-then-apply workflow" section and `MACRO_ANALYSIS.md` Section 4.5. Not auto-applied — surfaced as a Diagnostician recommendation, applied via explicit `cli.py apply-fix`. |
+| 4 | `streaming_table` STREAM keyword requirement | 🟢 Resolved (2026-09-12) | — | `dynamic_table` maps to `materialized_view`, not `streaming_table` — Streaming Tables reject aggregation and self-referencing correlated subqueries, which is exactly what real Snowflake `dynamic_table` usage commonly contains. Auto-applied (category 13, validated safe mechanical fix). See `MACRO_ANALYSIS.md` Section 4.6. |
+| 5 | `dbt_utils` macros not yet tested through Lakebridge | 🔴 Open | Yes | `generate_surrogate_key`, `star`, `union_relations` — not confirmed exercised in this project |
 | 6 | Custom materializations testing | 🔴 Open | No | If any exist in official repo |
 | 7 | Nested macros testing through Lakebridge | 🟡 Parked | No | |
 | 8 | Mock staging data for `STAGING` source | 🔴 Open | Yes — unblocks SCD model testing | `CUSTOMER` and `SALESORDER` tables needed |
@@ -107,3 +107,8 @@ Updated as items are resolved or new ones surface.
 | Session 1 | TPC-H source data | Databricks `samples.tpch` catalog — no loading needed |
 | Session 1 | `dim_calendar_day` rewrite | Manual rewrite — `GENERATOR`+`seq4()` → `explode(sequence())`, `decode()` → `CASE WHEN` |
 | Session 1 | Jinja constructs `ref()`, `this`, `is_incremental()` | ✅ All preserved through Lakebridge transpilation |
+| 2026-09-12 | `dynamic_table` → `streaming_table` guidance was wrong | Corrected to `materialized_view` — Streaming Tables reject aggregation/self-referencing subqueries. Auto-applied fix, category 13. |
+| 2026-09-14 | Systemic `data_type: number → bigint` bug in Macro Resolver | `DATA_TYPE_MAP` now maps `number` → `decimal(38,10)` (safe superset). Root-caused via `dim_current_year_orders`'s `DELTA_MERGE_INCOMPATIBLE_DATATYPE` failure. |
+| 2026-09-14 | Blast-radius audit of the `bigint` mislabeling bug | Confirmed: only `materialized_view`/`dynamic_table` models are affected (no `contract: enforced` anywhere in the project, Validator's schema check doesn't compare types). ~90 other occurrences are inert documentation, left as-is; noted rather than bulk-fixed. Second live landmine found and fixed dormant in `order_facts_dynamic`'s commented-out yml block (`total_order_value`, plus a second dialect gap: `DATE_TRUNC()` returns `TIMESTAMP` on Databricks, never `DATE`). See `FINDINGS.md` Section 4.3. |
+| 2026-09-14 | `get_stream` macro → Delta CDF architectural decision | Tested CDF-based redesign built and validated live (`customer_cdc_stream`, `dim_customer_changes` both pass). Surfaced via a new advisory-then-apply workflow (Diagnostician recommends, `cli.py apply-fix` applies) rather than auto-applied, since it's architectural. See `CHECKPOINT.md`. |
+| 2026-09-14 | Snowflake bare `SAMPLE(n)` syntax | No Databricks equivalent without the `TABLESAMPLE` keyword (percent-based by default). Added as a deterministic Transpiler fix + widened Diagnostician's `sampling_error` classifier. |

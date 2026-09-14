@@ -131,18 +131,60 @@ Failure produces broken SQL: `table.CAST(column AS STRING)` instead of `CAST(tab
 build. A bare `data_type: number` (no precision/scale) doesn't say whether the underlying
 Snowflake column is truly integer-only or a decimal/currency value — `NUMBER` is used for
 both. Real case found: `total_price` columns (`gold._models.yml`) got mapped to `bigint`,
-but the actual built columns are `DECIMAL(18,2)`. This went unnoticed for most
-materializations (`table`/`incremental` infer their schema from the query, ignoring the yml
-doc), but `dbt-databricks`'s `materialized_view` materialization emits an *explicit*
-column-type DDL sourced from the yml docs — the wrong `bigint` declaration then conflicts
-with the real `DECIMAL` data at creation time: `[DELTA_MERGE_INCOMPATIBLE_DATATYPE] Failed
-to merge incompatible data types LongType and DecimalType(18,2)`, with no column name in
-the error message. `decimal(38,10)` is a safe superset — genuinely-integer columns lose
-nothing by being decimal-typed instead, so this direction is always safe; the reverse
-(decimal data forced into `bigint`) is not. Other currency/rate-like columns across this
-project (`account_balance`, `extended_price`, `discount`, `tax`, `exchange_rate`, etc.)
-likely have the same latent doc error, but haven't caused a build failure since they're not
-used in a `materialized_view` model — not exhaustively swept, flagged for follow-up.
+but the actual built columns are `DECIMAL(18,2)`. `decimal(38,10)` is a safe superset —
+genuinely-integer columns lose nothing by being decimal-typed instead, so this direction is
+always safe; the reverse (decimal data forced into `bigint`) is not.
+
+**Blast-radius investigation (2026-09-14, prompted by a request to confirm actual impact
+before retrofitting broadly).** Whether a wrong yml `data_type` actually corrupts data
+depends entirely on whether *anything* enforces it:
+- No `contract: enforced` exists anywhere in this project.
+- `dbt-databricks` only emits *explicit* column-type DDL sourced from yml docs for the
+  `materialized_view`/`dynamic_table` materializations — `table`/`incremental`/`view`/
+  `ephemeral` all infer their schema from the query itself and ignore the yml doc entirely.
+- The Validator agent's schema check only verifies documented *column names* are present,
+  never types; its row-count/checksum checks run against the real physical table (whose
+  actual type reflects the query, not the doc).
+
+So for ~90 of the ~93 `data_type: bigint` occurrences project-wide (everything outside a
+`materialized_view`/`dynamic_table` model), the wrong label is **inert documentation with no
+functional impact today** — confirmed empirically, not assumed. Genuinely
+decimal-but-mislabeled columns exist across bronze/silver/gold (`account_balance`,
+`extended_price`, `discount`, `tax`, `exchange_rate`, `avg_discount_rate`,
+`total_extended_price`, and more — verified against the real TPC-H source schema, where
+`l_quantity`/`l_extendedprice`/`l_discount`/`l_tax`/`o_totalprice`/`c_acctbal` are all
+genuinely `decimal(18,2)`, never integer) but are left as-is per user decision: only fix
+where it's demonstrably causing malformed values; note the rest rather than bulk-editing
+~30 columns with no current effect. Watch this list if any of those models is ever converted
+to `materialized_view`/`dynamic_table`, or if model contracts are ever adopted.
+
+**Second occurrence found and fixed — `order_facts_dynamic` (the *other* `materialized_view`
+model, dormant).** This model's entire yml `columns:` block was commented out (collateral
+damage from the `dbt_constraints` over-commenting bug, Section 5), so its
+`total_order_value: bigint` mislabel was inert — but a live landmine: reactivating that block
+would immediately reproduce the exact class of failure above. Verified by temporarily
+reactivating the block in the workspace copy only, running `dbt run --full-refresh`, and
+fixing forward through what surfaced — **the same class of bug has more failure modes than
+just integer-vs-decimal**, both confirmed live against the real warehouse:
+- `order_date`, computed via `DATE_TRUNC('DAY', o_orderdate)`, was documented as `date` —
+  but Databricks/Spark SQL's `DATE_TRUNC()` **always returns `TIMESTAMP`**, never `DATE`,
+  regardless of truncation unit (confirmed via `typeof()`) — unlike Snowflake, where this can
+  return `DATE`. A second, independent Snowflake→Databricks dialect difference from the same
+  root cause (a yml doc written for Snowflake semantics, not verified against Databricks).
+- `total_order_value`, computed via `SUM(o_totalprice)` on a `decimal(18,2)` source column,
+  needed `decimal(28,2)` — not `decimal(18,2)`. Spark SQL's `SUM()` aggregate **widens
+  decimal precision by +10** (capped at 38), confirmed via `typeof()`. Matching the source
+  column's own precision is not sufficient once it passes through an aggregate.
+  `[DELTA_MERGE_INCOMPATIBLE_DECIMAL_TYPE] Failed to merge decimal types with incompatible
+  precision 18 and 28` was the exact error.
+
+Net effect: for a `materialized_view`/`dynamic_table` model, an accurate yml `data_type`
+means matching the *exact* Databricks-computed type of the expression — not just "close
+enough," and not the Snowflake-side type. Fixed (both the dormant workspace-copy block and
+the original source, still commented, ready for whenever it's reactivated):
+`order_date: date` → `timestamp`, `total_order_value: bigint` → `decimal(28,2)`. Verified
+live: the reactivated block built successfully with these two corrections; reverted back to
+its original commented state afterward (reactivating dead code wasn't requested).
 
 ### 4.4 Sampling
 | Snowflake | Databricks |
