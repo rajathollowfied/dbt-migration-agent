@@ -1,0 +1,368 @@
+# Project Checkpoint
+
+Running, git-tracked log of architecture decisions, status, and every real bug
+found while building the 8-agent Snowflake→Databricks dbt migration pipeline.
+This is the traceable counterpart to the Claude session memory checkpoint
+(which lives outside this repo, at
+`~/.claude/projects/.../memory/dbt_migration_agent_pipeline.md`, and is not
+visible in `git log` or to anyone without that Claude Code installation).
+Update this file at the same time as that memory, after every major step —
+see the "Commit and checkpoint" standing instruction.
+
+Building an 8-agent pipeline (Preflight, Macro Resolver, Data Loader,
+Analyzer, Transpiler, Executor, Diagnostician, Validator) per
+`AGENT_DESIGN.md`. Agents run natively inside Databricks Free Edition,
+orchestrated eventually as Databricks Workflow tasks via a bundle
+(`databricks.yml`), with a Streamlit chat UI on Databricks Apps. Storage is
+Unity Catalog Delta tables in catalog `dbt_migration` (schemas:
+landing/bronze/silver/gold/audit). Test project is `snowflake-dbt-demo/`. CLI
+profile `free_community`, workspace `dbc-d531ded2-aae8.cloud.databricks.com`,
+SQL Warehouse id `b05480be6edc2be5`.
+
+Key docs to consult per agent: `AGENT_DESIGN.md` (responsibilities),
+`FINDINGS.md` (migration patterns), `MACRO_ANALYSIS.md` (macro handling),
+`OPEN_ITEMS.md` (open dependencies), `AUDIT_SCHEMA.md` (Delta table DDL).
+
+## Architecture decision (2026-09-11)
+
+Every agent operates on an isolated copy under
+`dbt-migration-agent/migration-workspace/<project_name>/` (via
+`agents/common/workspace.py`'s `ensure_workspace_copy()`), never on the
+user-provided project path directly. The copy is created once (idempotent —
+existing copy is reused so fixes accumulate across the pipeline) and excludes
+`.git`/`target`/`dbt_packages`/`logs`. `--reset-workspace` on any agent's CLI
+discards and re-copies. Preflight's git-branch check reads from the original
+source path (which still has `.git`) via `self.source_path`; every other file
+mutation happens on `self.project_path` (the workspace copy).
+`output_databricks/` (used by the Transpiler Agent) holds the final
+post-processed model output before it's merged into the workspace copy.
+
+## Agent status
+
+- **Agent 1 — Preflight** (`agents/preflight.py`): 6 checks, auto-fixes
+  `dbt_project.yml`, creates the audit tables.
+- **Agent 2 — Macro Resolver** (`agents/macro_resolver.py`): classifies every
+  macro (auto_resolve/flag/hard_stop) via a bespoke registry for
+  known-validated macros (`get_stream`, `integration_key`, sequence macros,
+  masking policies, `snapshot_hash_arguments`) plus a generic heuristic
+  classifier + dispatch-scaffold/inline-fix generator for unrecognized macros
+  (generalizes to other client projects). Fixes yml `data_type` fields,
+  comments out live `dbt_constraints.*` test blocks (block-aware), downgrades
+  `Snowflake-Labs/dbt_constraints` in packages.yml.
+- **Agent 3 — Data Loader** (`agents/data_loader.py`): classifies every
+  source table into native_redirect / unused / copied(-or-unavailable).
+  Detects Snowflake's built-in `SNOWFLAKE_SAMPLE_DATA.TPCH*` and redirects
+  `_sources.yml` to Databricks' `samples.tpch`. The live-Snowflake-copy path
+  is implemented but **untested** — no real Snowflake account in this
+  sandbox.
+- **Agent 4 — Analyzer** (`agents/analyzer.py`): runs `dbt parse` and reads
+  `manifest.json` for the DAG and raw SQL, scans for a 19-pattern
+  Snowflake-construct list, cross-references called macros against Macro
+  Resolver's own classifier, classifies Easy/Medium/Complex.
+- **Agent 5 — Transpiler** (`agents/transpiler.py`): Lakebridge (`v0.15.1`,
+  Morpheus `v0.10.0`) runs once over the whole `models/` tree per invocation.
+  Post-processor covers `config()` kwarg cleanup, `dynamic_table` ->
+  `materialized_view`, `VARCHAR(n)` -> `STRING`, `ALTER SESSION`/`USE
+  WAREHOUSE` removal, TABLESAMPLE alias repositioning, bare `SAMPLE(n)` ->
+  `TABLESAMPLE (n PERCENT)`, trailing-semicolon strip, plus 4 corruption
+  detectors (see "Lakebridge findings" below).
+- **Agent 6 — Executor** (`agents/executor.py`): runs `dbt run
+  --no-fail-fast --threads N` against the workspace copy, parses
+  `run_results.json`+`manifest.json` for per-model pass/fail/blocked, writes
+  to `model_runs`, generates an Excel report via `scripts/dbt_report.py` to
+  `dbt-migration-agent/reports/<run_id>.xlsx`.
+- **Agent 7 — Diagnostician** (`agents/diagnostician.py`): classifies each
+  failed model's error into 14 categories via regex, with
+  `auto_fixable`/`llm_eligible` flags. Deterministic fixes reuse Transpiler's
+  `post_process()`. LLM fallback uses Model Serving
+  (`databricks-gpt-oss-120b`) for category 14 (unknown) and any category
+  where the deterministic pass finds nothing.
+- **Agent 8 — Validator** (`agents/validator.py`): validates every model that
+  passed in the last Executor run — schema subset check, business rules via
+  the model's own dbt tests, row count + checksum (Snowflake comparison when
+  configured, Databricks-only sanity check otherwise). Migration score
+  (40/30/20/10 weights) normalized over only the checks that actually ran.
+- **`cli.py`**: the slash-command router chaining all 8 agents.
+  `preflight`/`macros`/`load`/`analyze`/`transpile`/`execute`/`diagnose`/`validate`
+  delegate to each agent's own `main()`. `run` is the full pipeline
+  (hard-stop routing per AGENT_DESIGN.md Section 6). `status` reads the
+  latest `pipeline_runs` row plus a deduplicated human-review queue.
+  `apply-fix <project_path> <model_name>` (added 2026-09-14) is the explicit
+  trigger for a Diagnostician recommendation — see "Advisory-then-apply
+  workflow" below.
+- No `databricks.yml` bundle yet — deliberately deferred until a stable
+  checkpoint (build order: local first, bundle once stable).
+
+## Lakebridge findings (empirically confirmed)
+
+- Already handles correctly: `::type` casts, `iff()`->`IF()`,
+  `decode()`->`CASE WHEN`, array literals, `sysdate()`->`CURRENT_TIMESTAMP()`,
+  `extract('year',x)`, and all Jinja (config blocks, macro calls, ref/source,
+  control flow).
+- Jinja used as an inline VALUE inside an unusual SQL clause position can
+  come out corrupted (a `PIVOT ... FOR x IN (...)` case left a broken
+  placeholder token `!#Jinja0005#!` with zero reported errors, and silently
+  dropped a second Jinja block). Confirmed narrow via a second, more
+  Jinja-heavy model that transpiled perfectly. Transpiler hard-stops any file
+  matching `!#Jinja\d+#!`, keeps the original raw SQL, flags for review.
+- TABLESAMPLE alias position: Databricks requires the alias AFTER
+  `TABLESAMPLE` — `AS alias TABLESAMPLE(...)` is a parse error. Lakebridge
+  sometimes emits the invalid form; fixed by `post_process()`.
+- Lakebridge's own CLI exits non-zero whenever *any* file in a batch has a
+  parsing/analysis error — not a crash, per-file success is determined by
+  output existence, not process exit code.
+- The CLI needs `--output-folder`'s *parent* directory to already exist.
+
+### Three distinct Lakebridge silent-corruption modes (found via live Executor testing)
+
+1. **Trailing semicolon breaks ephemeral models.** Lakebridge always appends
+   a `;` — harmless for a top-level statement, but a hard syntax error once
+   dbt inlines an ephemeral model's SQL as a parenthesized CTE in every
+   downstream consumer. Cascaded into 5+ failures. Fix: `post_process()`
+   always strips a trailing `;`.
+2. **Injected `-- internal error` comment** written directly into
+   otherwise-successful-looking output when Lakebridge hits an internal
+   transpilation error it can't fully recover from. Corrupted
+   `dim_calendar_day.sql` (which needed zero changes) and 4 other files. Fix:
+   `INTERNAL_ERROR_RE` detects the marker and hard-stops that file.
+3. **Silently dropped CTE definitions with no error marker at all** — when a
+   CTE's body is pure Jinja control flow with no literal SQL immediately
+   after the opening paren, Lakebridge can drop the *definition* while
+   keeping every *reference*, producing `TABLE_OR_VIEW_NOT_FOUND` at run
+   time. Broke `DIM__CUSTOMERS`/`DIM__ORDERS`. Fix: `find_dropped_ctes()`
+   verifies every such CTE is still defined in Lakebridge's output.
+
+All three: hard-stop that file, keep original raw SQL, flag for human
+review. Transpiler has 4 corruption detectors total (including the Jinja
+placeholder case).
+
+## Real bugs found and fixed, chronologically
+
+**Transpiler idempotency (2026-09-11):** Transpiler merges its output back
+into the workspace copy so `dbt compile` can see it — but a second run was
+re-feeding its own prior output back into Lakebridge as raw Snowflake SQL,
+causing corruption. Fixed by always transpiling from the pristine original,
+never the workspace copy.
+
+**Cross-session auth (2026-09-11):** `WorkspaceClient(profile=...)` can fail
+with an ambiguous-host error even with an explicit profile — a
+databricks-sdk quirk when another profile shares the same host. Fixed
+centrally in `agents/common/db.py`'s `get_client()` by setting
+`DATABRICKS_CONFIG_PROFILE` before constructing the client.
+`DBT_DATABRICKS_TOKEN` also doesn't persist across shells — regenerate via
+`databricks auth token --profile free_community` each session.
+
+**Analyzer comment-stripping (2026-09-11):** the 19-pattern scanner matched
+raw SQL text without stripping comments first, so a model whose header
+comment *described* an already-fixed construct got flagged as still needing
+it. Fixed via `strip_sql_comments()`.
+
+**`pattern_library` DDL (2026-09-11):** `times_applied INT DEFAULT 0` fails
+on this workspace (`WRONG_COLUMN_DEFAULTS_FOR_DELTA_FEATURE_NOT_ENABLED`).
+Dropped the `DEFAULT 0`; writers supply it explicitly.
+
+**Macro Resolver — nested-paren parser blind spot (2026-09-11):**
+`get_stream` and both sequence macros never appeared in `macro_resolution`
+on any run — their default-argument values use nested parens for grouping,
+and the old regex couldn't handle nesting, so it silently skipped these
+macros entirely. Fixed with a hand-rolled balanced-paren scanner
+(`_find_matching_paren`/`_next_macro_start`).
+
+**Macro Resolver — `requires_human_review` false flip (2026-09-11):**
+re-verifying an already-resolved flag/hard_stop macro reclassified from the
+dispatcher stub's own (trivially clean) body, always yielding
+`auto_resolve`. Fixed by reclassifying from the `KNOWN_MACROS` registry
+(ground truth) or the `databricks__<name>` implementation's body instead.
+
+**`dynamic_table` should map to `materialized_view`, not `streaming_table`
+(2026-09-12):** Databricks Streaming Tables reject aggregation and
+self-referencing correlated subqueries — both common in real Snowflake
+`dynamic_table` usage. Materialized View is the correct general-purpose
+match (same declarative auto-refresh idea, batch re-computation instead of
+incremental stream processing). Fixed in `transpiler.py`'s `post_process()`
+and as a `diagnostician.py` run-time safety net (`fix_streaming_table_error`,
+category 13, `auto_fixable=True`). `order_facts_dynamic` fully auto-fixed
+(7,499,048 rows); `dim_current_year_orders` needed the further fix below.
+
+**`blocked_by_upstream` always `False` (2026-09-12):** checked dbt's skip
+`message` field for "upstream", which dbt never actually populates. Fixed to
+derive from the real dependency graph (any direct dependency with a
+non-success status) — naturally handles multi-level cascades too.
+
+**Systemic `data_type: number -> bigint` bug in Macro Resolver (2026-09-14):**
+`dim_current_year_orders` still failed after the materialized_view fix
+above, with `DELTA_MERGE_INCOMPATIBLE_DATATYPE`. Root cause (after an
+initial wrong hypothesis about `ORDER BY`, corrected via `dbt --debug` on
+the real generated DDL): `materialized_view` emits explicit column-type DDL
+from yml docs, and `total_price`'s doc said `bigint` when the real column is
+`DECIMAL(18,2)` — traced to Macro Resolver's own `DATA_TYPE_MAP` collapsing
+Snowflake's ambiguous bare `NUMBER` to `bigint`, silently losing precision
+for currency-like columns. Same wrong `bigint` found on `account_balance`,
+`extended_price`, `discount`, `tax`, `exchange_rate` (not exhaustively fixed
+— not yet causing a build failure). Fixed: `DATA_TYPE_MAP` now maps `number`
+-> `decimal(38,10)` (safe superset). Corrected the 3 confirmed `total_price`
+yml entries in both the workspace copy and the original source project
+(this one warranted fixing the source too, since it's a tool bug that would
+silently reintroduce itself on `--reset-workspace`). Documented in
+`FINDINGS.md` Section 4.3. `dim_current_year_orders` now builds successfully
+(1,141,412 rows).
+
+Refreshed the audit trail properly (`cli.py execute` then `cli.py
+diagnose`): **32 pass / 8 fail / 5 blocked** (up from 29/9/7). A new failure
+surfaced once `dim_current_year_open_orders` unblocked —
+`executive_dashboard`, `DELTA_INVALID_CHARACTERS_IN_COLUMN_NAMES` (column
+names with spaces/`%`) — and Diagnostician's LLM fallback auto-fixed it
+correctly on the first retry, the first genuine LLM auto-fix success in this
+project.
+
+Cybersyn-missing-data cascade failures (`int_fx_rates__daily`,
+`lookup_exchange_rates`, and downstream `fct_order_lines`/`fact_order_line_*`)
+confirmed with user (2026-09-12) as expected/acceptable — this sandbox has
+no Snowflake Marketplace access.
+
+## Advisory-then-apply workflow for hard-stop categories with a real fix (2026-09-14)
+
+User asked that hard-stop error categories with an actual tested solution be
+surfaced as *advice* first, with applying the fix a separate, explicit
+user-triggered action (a UI button eventually; `cli.py apply-fix <model>`
+today) — "This gives the user more control and awareness." Scope confirmed
+via two questions:
+
+1. Only categories with a genuine code-level tested fix get this treatment —
+   `python_cluster_error`/`missing_source_data` have no code fix at all
+   (compute config / absent data) so they're unchanged, just flagged.
+2. `streaming_table_error` (category 13, the `materialized_view` swap) stays
+   on **auto-apply** — already validated as a safe one-line mechanical fix,
+   not architectural. The new advisory gate is for genuinely architectural
+   categories like Streams, not this one.
+
+Design question resolved without re-asking: Macro Resolver (Agent 2,
+compile-time) keeps auto-generating its usual dispatch-scaffold-with-stub
+for every macro including `get_stream` — that's necessary just to make the
+project *compile*, not a functional fix, so it's out of scope. The advisory
+gate lives entirely in Diagnostician (Agent 7, run-time): a
+`RECOMMENDED_FIXES` registry in `agents/diagnostician.py`, checked in
+`diagnose_one()` for any category with `auto_fixable=False,
+llm_eligible=False`. If an entry exists, the recommendation text goes into
+`attempted_fix` and a `pattern_library` row is logged with
+`source='recommended', times_applied=0` — visible as advice, never conflated
+with an applied fix — but the model file is untouched.
+`DiagnosticianAgent.apply_recommended_fix(model_name)` is the explicit-apply
+path: re-derives the model's error category, calls the registry entry's
+`apply()` against the workspace copy, re-runs the model, logs
+`source='recommended_applied_by_user'`. Wired to `cli.py apply-fix
+<project_path> <model_name>`.
+
+### The first RECOMMENDED_FIXES entry: `stream_error` — Snowflake Streams -> Delta CDF
+
+`apply_stream_cdf_pattern()` rewrites `databricks__get_stream` (previously a
+hard-stop stub returning `table` unchanged) to read `table_changes()` off
+the source table instead, with **zero SQL changes required in any consuming
+model** — every consumer already does `stream_alias.*`, so the macro emits
+the real base-table columns (via `adapter.get_columns_in_relation`) plus
+three synthetic ones:
+
+- `` `metadata$action` `` — CDF's `_change_type` mapped
+  `insert`/`update_postimage` -> `INSERT`, `delete`/`update_preimage` ->
+  `DELETE` (reproduces a standard Snowflake stream's pre/post-image pairing)
+- `` `metadata$isupdate` ``
+- `source_commit_version` — CDF's `_commit_version`, passed straight through
+  as the watermark
+
+Watermark tracking needs no external control table: `source_commit_version`
+is a normal passthrough column that lands in the consumer's own table
+automatically, and the next incremental run reads it back via
+`MAX(source_commit_version) FROM {{ this }}`.
+
+Two real bugs found and fixed via live testing:
+
+1. `table_changes()`'s starting-version argument must be a literal constant,
+   not a subquery (`DELTA_CDC_NON_CONSTANT_ARGUMENT`) — fixed by resolving
+   the watermark via `run_query()` to a literal before interpolating it.
+2. CDF can't retroactively see history from before it was enabled, so
+   `table_changes(t, 0)` fails on a table that already had rows — the
+   non-incremental (first) branch snapshots the table directly as all-INSERT
+   rows (mirrors Snowflake's `SHOW_INITIAL_ROWS=TRUE`) and seeds the
+   watermark from the table's current version via `DESCRIBE HISTORY ... LIMIT
+   1` (`get_current_delta_version()` helper macro).
+
+CDF is enabled idempotently via an unconditional `ALTER TABLE ... SET
+TBLPROPERTIES` on every macro call — no producer model needs manual opt-in.
+
+Also fixed `customer_cdc_stream.sql`, which wasn't going through
+`get_stream()` at all — it hand-rolled its own Snowflake `create/drop
+stream` DDL directly in `pre_hook`/`post_hook` (a hard `PARSE_SYNTAX_ERROR`,
+no macro involved). Those hooks are stripped and
+`tblproperties={'delta.enableChangeDataFeed': 'true'}` added to its config
+instead.
+
+Validated end-to-end against the real warehouse: initial load (750,000
+rows, watermark seeded correctly), a real incremental batch (one live
+`UPDATE` + one `DELETE` on `dim_customers` -> exactly one
+`INSERT`-with-`isupdate=true` row and one `DELETE` row appeared in
+`dim_customer_changes`, `update_preimage` correctly excluded, watermark
+advanced correctly), and a subsequent no-op rerun (zero rows, no error).
+Test mutations cleaned up afterward via `--full-refresh` on both models.
+Documented in `MACRO_ANALYSIS.md` Section 4.5. Only applied to the workspace
+copy (by design, via the advisory mechanism) — the original
+`snowflake-dbt-demo/` source is deliberately untouched, since this is an
+optional, user-triggered redesign, not a tool bug that would silently
+reintroduce itself on a workspace reset.
+
+### Two more real bugs found while refreshing the audit trail (2026-09-14)
+
+The first full-project `cli.py execute` after the CDF fix showed
+`dim_customer_changes` passing but `customer_cdc_stream` failing with a new,
+unrelated error — genuinely new because all manual CDF testing above used
+`--full-refresh`, which always takes the non-incremental branch, so this was
+the first time `customer_cdc_stream`'s incremental branch (`{% if
+is_incremental() %} SAMPLE(10) {% endif %}`) ever actually ran.
+
+1. **Snowflake's bare `SAMPLE(n)`** (no ROW/TABLESAMPLE keyword,
+   percent-based by default) has no Databricks equivalent without the
+   `TABLESAMPLE` keyword — confirmed against the real warehouse
+   (`PARSE_SYNTAX_ERROR`). Neither Lakebridge nor the existing
+   TABLESAMPLE-alias post-processor touches this shape. Fixed:
+   `transpiler.py`'s `post_process()` gained `BARE_SAMPLE_RE` ->
+   `TABLESAMPLE (n PERCENT)`; `diagnostician.py`'s category 6
+   (`sampling_error`) pattern widened to `\bSAMPLE\s*\(` too (word boundary
+   correctly excludes "SAMPLE" inside "TABLESAMPLE").
+2. **Category 4 (`stream_error`) classifier was too broad.** Its old
+   `metadata\$\w+` alternative matched any bare mention of a `metadata$`
+   column anywhere in an error's SQL dump, not just a genuine unresolved
+   reference. `customer_cdc_stream.sql` legitimately has its own
+   `METADATA$ACTION` business column, so the unrelated `SAMPLE(10)` failure
+   above got misclassified as `stream_error` — which would have surfaced the
+   wrong (CDF) recommendation for a completely unrelated bug. Fixed by
+   requiring `"cannot be resolved"` to co-occur with `metadata\$\w+` (note:
+   the `[UNRESOLVED_COLUMN...]` bracket itself is always stripped before
+   classification runs, so the literal text "UNRESOLVED_COLUMN" can't be
+   matched on directly). Verified both directions: the real
+   `customer_cdc_stream` bug now classifies as `sampling_error`, and
+   `dim_customer_changes`'s genuine stream failure still classifies as
+   `stream_error`.
+
+Both fixes are in agent code, so they're proactive for any future project,
+not just this one.
+
+**Final confirmed state after the full `cli.py execute` + `cli.py diagnose`
+refresh: 35 pass / 5 fail / 5 blocked** (up from 32/8/5 at this session's
+start, 29/9/7 originally). `customer_cdc_stream` and `dim_customer_changes`
+both pass; zero `stream_error` failures remain. The 5 remaining failures are
+all pre-existing, already-accepted architectural/missing-data cases with no
+code-level fix, correctly routed straight to human review with no
+recommendation surfaced: `async_bulk_operations`/`customer_clustering`
+(python_cluster_error x2), `int_fx_rates__daily`/`lookup_exchange_rates`/
+`dbt_query_history` (missing_source_data x3 — Cybersyn Marketplace data + a
+Snowflake-only system table, none available in this sandbox). Blocked=5 is
+the Cybersyn cascade through `fct_order_lines` and its 3 downstream
+consumers.
+
+## How to apply
+
+Before building the next agent, re-read this file plus the relevant
+`AGENT_DESIGN.md` section, reuse `agents/common/db.py` /
+`agents/common/audit_schema.py` / `agents/common/workspace.py` rather than
+re-implementing SQL execution, audit DDL, or the workspace-copy step, and
+remember to regenerate `DBT_DATABRICKS_TOKEN` at the start of a fresh shell
+session.
