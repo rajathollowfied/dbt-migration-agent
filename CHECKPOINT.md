@@ -416,9 +416,18 @@ again only if any of these models is ever converted to
 `get_stream`→CDF, `streaming_table`→`materialized_view`) — see its Resolution
 Log for the full list.
 
-Re-ran the full pipeline (`cli.py execute` then `cli.py validate`) afterward
-to get a validation pass on the two newly-fixed models — check the latest
-run for actual current numbers rather than assuming here.
+Re-ran the full pipeline (`cli.py execute` then `cli.py validate`)
+afterward: **35 pass / 5 fail / 5 blocked** (stable, matching the prior CDF
+fix's numbers — the `bigint` investigation didn't touch any live model), and
+Validator's average score rose to **97.9%** across all 35 passing models
+(up from 97.1%). `dim_customer_changes` — the CDF model — scored 100%:
+schema check clean, 3,000,000 rows, checksum computed. `order_facts_dynamic`
+correctly shows `schema: None — no yml column documentation found` (its
+`columns:` block is still, deliberately, commented out — Validator has
+nothing to check against, exactly as expected). The only business-rule
+failures are the same two already-known, already-accepted referential-
+integrity gaps (`dim_customers`/`dim_orders` at 80%, from the Cybersyn
+cascade) — no new data-quality issues surfaced.
 
 ## How to apply
 

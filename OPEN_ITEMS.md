@@ -87,15 +87,20 @@ Updated as items are resolved or new ones surface.
 
 ## POC Results (Sample Project — snowflake-dbt-demo)
 
+Superseded by the 8-agent pipeline — figures below are current as of
+2026-09-14 (`cli.py execute` + `cli.py diagnose` + `cli.py validate`, see
+`CHECKPOINT.md` for full history). Earlier rows here were from the
+pre-agent manual migration exploration.
+
 | Metric | Result |
 |--------|--------|
 | Total models | 52 |
-| Passing (v10) | 31 (60%) |
-| Adjusted pass rate (excl. POC skips + hard stops) | 77% |
-| Hard stops | 3 — `customer_cdc_stream`, `dim_customer_changes`, architectural streaming |
-| POC skips | 5 — Python cluster, Cybersyn data, Snowflake system table |
-| Manual runs to reach stable state | 10 |
-| Patterns discovered | 25+ (see `FINDINGS.md` Section 4) |
+| Passing | 35 (67%) |
+| Failing | 5 — all pre-existing, accepted, no code-level fix (2 python_cluster_error, 3 missing_source_data) |
+| Blocked | 5 — Cybersyn cascade through `fct_order_lines` |
+| Hard stops requiring architectural redesign | 0 — the last one (`get_stream`→CDF) resolved 2026-09-14 |
+| Validator average score (35 passing models) | 97.9% |
+| Patterns discovered | 30+ (see `FINDINGS.md` Section 4) |
 
 ---
 
