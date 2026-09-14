@@ -94,6 +94,13 @@ USE_WAREHOUSE_RE = re.compile(r"\bUSE\s+WAREHOUSE\s+\S+\s*;?", re.IGNORECASE)
 TABLESAMPLE_ALIAS_BEFORE_RE = re.compile(
     r"(\bFROM\s+[\w.]+)\s+AS\s+(\w+)\s+(TABLESAMPLE\s*\([^)]*\))", re.IGNORECASE
 )
+# Snowflake's bare SAMPLE(n) (no ROW/TABLESAMPLE keyword) is percent-based by
+# default and has no Databricks equivalent without the TABLESAMPLE keyword —
+# confirmed against the real warehouse (PARSE_SYNTAX_ERROR). Neither Lakebridge
+# nor the TABLESAMPLE-alias fix above touches this shape (real failure found
+# 2026-09-14: customer_cdc_stream.sql's `SAMPLE(10)` survived transpilation
+# untouched). \b blocks matching "SAMPLE" inside "TABLESAMPLE" itself.
+BARE_SAMPLE_RE = re.compile(r"\bSAMPLE\s*\(\s*(\d+)\s*\)", re.IGNORECASE)
 # Patterns the post-processor deliberately does NOT auto-fix — the real fix (like
 # dim_calendar_day's) is a manual SQL rewrite, not a safe mechanical substitution.
 MANUAL_REWRITE_PATTERNS = [
@@ -158,6 +165,11 @@ def post_process(sql: str) -> tuple[str, list[str]]:
             lambda m: f"{m.group(1)} {m.group(3)} AS {m.group(2)}", new_sql,
         )
         fixes.append("repositioned TABLESAMPLE alias (Databricks requires alias after clause)")
+
+    if BARE_SAMPLE_RE.search(new_sql):
+        new_sql = BARE_SAMPLE_RE.sub(lambda m: f"TABLESAMPLE ({m.group(1)} PERCENT)", new_sql)
+        fixes.append("SAMPLE(n) -> TABLESAMPLE (n PERCENT) (Snowflake's bare form is percent-based; "
+                     "Databricks requires the TABLESAMPLE keyword)")
 
     # Lakebridge always appends a trailing `;`. Harmless for a model that runs as
     # its own top-level statement, but a hard syntax error for an ephemeral model —

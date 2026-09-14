@@ -65,11 +65,31 @@ CATEGORIES: list[tuple[int, str, re.Pattern, bool, bool]] = [
     (1, "type_casting", re.compile(r"::\s*(varchar|number|integer|timestamp_ntz|date)\b", re.IGNORECASE), True, True),
     (2, "missing_function", re.compile(r"UNRESOLVED_ROUTINE|\bsysdate\s*\(|CURRENT_WAREHOUSE\s*\(", re.IGNORECASE), True, True),
     (3, "sequence_error", re.compile(r"CREATE\s+SEQUENCE|\.nextval\b|for SEQUENCE:.*argument", re.IGNORECASE), False, False),
-    (4, "stream_error", re.compile(r"SHOW\s+STREAMS|metadata\$\w+|near 'stream'", re.IGNORECASE), False, False),
+    # metadata$ only counts as a stream-error signal paired with "cannot be
+    # resolved" (a real unconverted stream column reference failing to
+    # resolve — Databricks' own UNRESOLVED_COLUMN message text; note the
+    # `[UNRESOLVED_COLUMN...]` bracket ITSELF is always stripped before this
+    # runs, per _ERROR_CODE_PREFIX_RE below, so it can't be matched on here) —
+    # a bare mention of metadata$ elsewhere in an error's SQL dump doesn't mean
+    # stream-related at all. Real bug found 2026-09-14: customer_cdc_stream.sql
+    # legitimately HAS its own `METADATA$ACTION` business column (simulating
+    # stream output), so an unrelated bare-SAMPLE(10) syntax error in that same
+    # file's compiled SQL dump matched this pattern's old bare `metadata\$\w+`
+    # alternative and was misclassified as stream_error — which would have
+    # surfaced the wrong (CDF) recommendation for a completely unrelated bug.
+    (4, "stream_error", re.compile(
+        r"SHOW\s+STREAMS|metadata\$\w+[^\n]{0,80}cannot be resolved|near 'stream'", re.IGNORECASE,
+    ), False, False),
     # Genuine array-literal syntax: brackets wrapping quoted values, e.g. ['a','b'].
     # NOT a bare `[ERROR_CODE]` prefix — Databricks puts one of those on every message.
     (5, "array_literal", re.compile(r"\[\s*['\"][^\]]*['\"]\s*\]"), True, True),
-    (6, "sampling_error", re.compile(r"SAMPLE\s+ROW|TABLESAMPLE", re.IGNORECASE), True, True),
+    # \bSAMPLE\s*\( also catches Snowflake's bare SAMPLE(n) form (no ROW/
+    # TABLESAMPLE keyword at all, percent-based by default) -- confirmed via a
+    # real failure (customer_cdc_stream.sql) that neither Lakebridge nor the
+    # existing TABLESAMPLE-alias post-processor touches it, since it's a
+    # different keyword shape from both. \b prevents matching the "SAMPLE"
+    # inside "TABLESAMPLE" (no word boundary between "TABLE" and "SAMPLE").
+    (6, "sampling_error", re.compile(r"SAMPLE\s+ROW|TABLESAMPLE|\bSAMPLE\s*\(", re.IGNORECASE), True, True),
     (7, "materialization_error", re.compile(r"\bdynamic_table\b", re.IGNORECASE), True, False),
     (8, "session_command", re.compile(r"ALTER\s+SESSION|USE\s+WAREHOUSE", re.IGNORECASE), True, True),
     (9, "data_type_error", re.compile(r"\bVARCHAR\(\d+\)|\bNUMBER\(\d+\s*,\s*\d+\)", re.IGNORECASE), True, True),
