@@ -429,6 +429,120 @@ failures are the same two already-known, already-accepted referential-
 integrity gaps (`dim_customers`/`dim_orders` at 80%, from the Cybersyn
 cascade) — no new data-quality issues surfaced.
 
+## dbt snapshots wired into Transpiler and Executor (2026-09-14)
+
+Found while confirming there were no other loose ends before moving to the
+explicitly-deferred bundle/UI work: `AGENT_DESIGN.md` never mentions
+"snapshot" anywhere — the whole 8-agent pipeline was built entirely around
+`models/`. This project has 2 real Type-2 SCD snapshots
+(`snapshots/30_presentation/DIM_CUSTOMERS_SCD.sql`,
+`DIM_CUSTOMERS_FROM_STREAM.sql`) that had never been touched by any agent —
+Transpiler only walked `models/`, Executor only ran `dbt run` (a separate
+command from `dbt snapshot`). Investigated live (user's explicit call, not
+deferred): running `dbt snapshot` directly against the raw, untranspiled
+files showed `DIM_CUSTOMERS_SCD.sql` already works as-is, but
+`DIM_CUSTOMERS_FROM_STREAM.sql` failed — double-quoted identifiers
+(`"METADATA$ACTION"`, Snowflake-valid, invalid on Databricks by default) and
+`iff()`. Pointed the existing `run_lakebridge()` at `snapshots/` directly
+(reusing infra, no new transpiler needed) — Lakebridge fixed both issues
+cleanly (backticks, `IFF()`), verified live: both snapshots build correctly
+with real data (750,000 rows each, matching the TPC-H customer count).
+
+**Wired in as a permanent, first-class part of the pipeline** (user's
+explicit choice over documenting-only): `transpiler.py`'s per-file loop was
+extracted into `_transpile_directory()`, now called once for `models/` and
+again for `snapshots/` if it exists — identical Lakebridge + post_process()
++ all 4 corruption detectors, reused as-is. One real wrinkle: a snapshot's
+dbt-visible name is declared inside the file (`{% snapshot NAME %}`), not
+implied by the filename the way a model's is (confirmed via manifest.json:
+`DIM_CUSTOMERS_FROM_STREAM.sql` declares snapshot name
+`DIM_CUSTOMERS_STREAM_SCD`) — added `ModelTranspileResult.audit_name` so
+Transpiler's own audit rows match what Executor's manifest-derived rows call
+the same node; without this they'd silently disagree.
+`executor.py` gained a `dbt snapshot` step (only if `snapshots/` exists and
+has `.sql` files) after `dbt run`, reusing the exact snapshot/restore pattern
+already established for `target/run_results.json` in Diagnostician/
+Validator's own targeted `--select` calls — `dbt run` and `dbt snapshot` are
+separate commands that each overwrite the whole file, so without
+backup/restore, Executor's own final on-disk state would leave
+Diagnostician/Validator reading snapshot-only results afterward. Refactored
+`parse_run_results()` into `read_raw_results()` (just reads, filtered by
+node-type prefix) + `build_results()` (derives `blocked_by_upstream` from a
+combined models+snapshots status map — this project's `DIM_CUSTOMERS_STREAM_SCD`
+snapshot actually depends on a model, `customer_cdc_stream`, so a
+per-node-type-siloed status lookup would have missed that cross-type
+dependency). The Excel report stays model-only by design (`scripts/
+dbt_report.py` is a user-provided script, reused as-is, never scoped to
+snapshots) — generated from `dbt run`'s results before the snapshot step
+runs, so its behavior is completely unchanged from before.
+**Explicitly not in scope**: Diagnostician's `read_failed_models()` still
+only looks at `model.`-prefixed manifest nodes, so a failing snapshot isn't
+picked up for auto-fix — it lands in the human review queue same as before,
+just without a retry attempt. Noted, not silently expanded further.
+
+**A second real bug found while testing this wiring, unrelated to
+snapshots**: `agents/common/workspace.py`'s `ensure_workspace_copy()` never
+validated `source_path` actually exists once the cached workspace copy was
+already present — so a wrong/stale relative `project_path` (exactly what
+happened this session: `cli.py <cmd> snowflake-dbt-demo` from inside
+`dbt-migration-agent/`, when the sample project is actually a *sibling*
+directory at `../snowflake-dbt-demo`) silently kept reusing the stale
+cached copy instead of failing. This went completely undetected for the
+entire session because every OTHER agent only ever touches the cached
+workspace copy — only Transpiler reads `source_path` directly (by design,
+for its own idempotency), and today was the first time Transpiler was
+re-invoked standalone since the path mistake was made. Fixed: `not
+source.exists()` now raises a clear `FileNotFoundError` immediately, so any
+agent surfaces the same error a first-time caller would instead of silently
+operating on stale state.
+**Consequence discovered from this fix actually working correctly**:
+re-running Transpiler for real (correct path, first time all session)
+regenerated every model file from the *true* pristine source — which
+revealed the workspace copy's `customer_cdc_stream.sql` CDF fix (applied
+only to the workspace copy, by design, via the advisory mechanism) got
+overwritten back to its broken pre_hook/post_hook state, since Transpiler
+always regenerates from `source_path`, never the workspace copy (its own
+established idempotency design). Re-applied `apply_stream_cdf_pattern()`
+(idempotent, cheap) to restore it. Also revealed that the *original source
+project* (`snowflake-dbt-demo/`, separately git-tracked, predates the agent
+system) still has `materialized = 'streaming_table'` hand-baked into both
+`dim_current_year_orders.sql` and `order_facts_dynamic.sql` — a leftover
+from an early, WRONG manual migration attempt (per the old, now-corrected
+AGENT_DESIGN.md/MACRO_ANALYSIS.md guidance) — not `dynamic_table`, the real
+Snowflake value `post_process()`'s regex looks for, so Transpiler's
+proactive fix never fires for these two files on a fresh regenerate.
+Confirmed this self-heals correctly through the *existing*, already-
+validated runtime safety net instead (Diagnostician's category 13
+`fix_streaming_table_error`, `auto_fixable=True`): `cli.py diagnose` caught
+and correctly fixed `order_facts_dynamic` in one retry.
+`dim_current_year_orders`'s own retry got the identical correct file fix
+written (`materialized='materialized_view'`, confirmed by reading the file
+directly) but its live verification run hit the Free Edition serverless
+compute quota (`RESOURCE_EXHAUSTED` — likely materialized-view pipeline
+compute specifically, saturated from today's unusually heavy volume of live
+testing, not the SQL Warehouse itself, which showed idle) three times in a
+row before exhausting retries — a transient environmental issue, not a code
+bug; needs wall-clock time to recover, not a fix.
+
+**Confirmed resolved the next day (2026-09-15):** retried `dim_current_year_orders`
+directly — passed cleanly (1,141,412 rows, matching the exact count from
+its original fix earlier this session), confirming the quota exhaustion was
+purely transient, as expected. Refreshed the full pipeline afterward
+(`cli.py execute` then `cli.py diagnose`): **37 pass (35 models + the 2
+snapshots) / 5 fail / 5 blocked**. `executive_dashboard` hit a fresh
+instance of the invalid-column-names issue found earlier this session
+(`DELTA_MERGE_UNRESOLVED_EXPRESSION` this time, not
+`DELTA_INVALID_CHARACTERS_IN_COLUMN_NAMES` — same underlying cause, a
+different symptom depending on exactly where in the MERGE it's hit) —
+expected, since Transpiler always regenerates this file from pristine
+source, which still has the raw invalid column names; self-healed correctly
+via the same Diagnostician LLM-fallback path validated earlier (category 14,
+fixed in 2 retries). The 5 remaining failures are the same already-accepted
+architectural/missing-data cases as always (2 python_cluster_error, 3
+missing_source_data). Snapshot wiring is now fully confirmed end-to-end with
+a clean full-pipeline run, not just the standalone tests from the day
+before.
+
 ## How to apply
 
 Before building the next agent, re-read this file plus the relevant

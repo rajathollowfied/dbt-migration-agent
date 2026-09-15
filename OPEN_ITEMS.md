@@ -98,18 +98,19 @@ to test against this sample project.
 ## POC Results (Sample Project — snowflake-dbt-demo)
 
 Superseded by the 8-agent pipeline — figures below are current as of
-2026-09-14 (`cli.py execute` + `cli.py diagnose` + `cli.py validate`, see
+2026-09-15 (`cli.py execute` + `cli.py diagnose` + `cli.py validate`, see
 `CHECKPOINT.md` for full history). Earlier rows here were from the
 pre-agent manual migration exploration.
 
 | Metric | Result |
 |--------|--------|
 | Total models | 52 |
-| Passing | 35 (67%) |
+| Total snapshots | 2 — wired into Transpiler + Executor 2026-09-14, previously untouched by any agent |
+| Passing | 35 models + 2 snapshots = 37 |
 | Failing | 5 — all pre-existing, accepted, no code-level fix (2 python_cluster_error, 3 missing_source_data) |
 | Blocked | 5 — Cybersyn cascade through `fct_order_lines` |
 | Hard stops requiring architectural redesign | 0 — the last one (`get_stream`→CDF) resolved 2026-09-14 |
-| Validator average score (35 passing models) | 97.9% |
+| Validator average score (35 passing models — Validator, like Diagnostician, doesn't extend to snapshots) | 97.9% |
 | Patterns discovered | 30+ (see `FINDINGS.md` Section 4) |
 
 ---
