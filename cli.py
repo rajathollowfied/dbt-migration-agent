@@ -278,46 +278,56 @@ def run_apply_fix(args: argparse.Namespace) -> int:
     return 0 if ok else 1
 
 
-def run_status(args: argparse.Namespace) -> int:
-    client = get_client(args.profile)
+def fetch_status(client, catalog: str, warehouse_id: str):
+    """Returns (latest_pipeline_run, review_queue) as raw SqlResult objects —
+    shared by the CLI's `status` command and app.py's Status tab, so both
+    read the exact same queries rather than app.py re-deriving its own.
+    """
     from agents.common.db import execute_sql as _exec
 
-    print("Most recent pipeline run:")
-    r = _exec(
-        client, args.warehouse_id,
+    latest_pipeline_run = _exec(
+        client, warehouse_id,
         f"SELECT run_id, developer, start_time, end_time, pipeline_status, total_models, "
-        f"passed, failed, blocked, needs_review FROM {args.catalog}.audit.pipeline_runs "
+        f"passed, failed, blocked, needs_review FROM {catalog}.audit.pipeline_runs "
         f"ORDER BY start_time DESC LIMIT 1",
-        catalog=args.catalog,
+        catalog=catalog,
     )
-    if r.rows:
-        cols = r.columns
-        for col, val in zip(cols, r.rows[0]):
-            print(f"  {col}: {val}")
-    else:
-        print("  (no pipeline runs recorded yet)")
 
-    print("\nHuman review queue (latest status per model, across all runs):")
     # model_runs is an append-only log — every agent that touches a model writes
     # its own row, so the same failing model accumulates one row per agent per
     # run. Take only the most recent row per model, otherwise this lists the same
     # model multiple times (once from Executor's row with no error_category set,
     # once from Diagnostician's row with the real classification).
-    r2 = _exec(
-        client, args.warehouse_id,
+    review_queue = _exec(
+        client, warehouse_id,
         f"""
         SELECT model_name, error_category, final_error_message FROM (
             SELECT model_name, error_category, final_error_message, requires_human_review,
                    ROW_NUMBER() OVER (PARTITION BY model_name ORDER BY run_timestamp DESC) AS rn
-            FROM {args.catalog}.audit.model_runs
+            FROM {catalog}.audit.model_runs
         ) WHERE rn = 1 AND requires_human_review = true
         ORDER BY model_name
         LIMIT 20
         """,
-        catalog=args.catalog,
+        catalog=catalog,
     )
-    if r2.rows:
-        for row in r2.rows:
+    return latest_pipeline_run, review_queue
+
+
+def run_status(args: argparse.Namespace) -> int:
+    client = get_client(args.profile)
+    latest_pipeline_run, review_queue = fetch_status(client, args.catalog, args.warehouse_id)
+
+    print("Most recent pipeline run:")
+    if latest_pipeline_run.rows:
+        for col, val in zip(latest_pipeline_run.columns, latest_pipeline_run.rows[0]):
+            print(f"  {col}: {val}")
+    else:
+        print("  (no pipeline runs recorded yet)")
+
+    print("\nHuman review queue (latest status per model, across all runs):")
+    if review_queue.rows:
+        for row in review_queue.rows:
             print(f"  - {row[0]} ({row[1]}): {str(row[2])[:100]}")
     else:
         print("  (empty)")
