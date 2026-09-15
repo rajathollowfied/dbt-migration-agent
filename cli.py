@@ -90,18 +90,6 @@ Run `python cli.py <command> --help` for a command's own flags.
 """
 
 
-def get_git_branch(project_path: str) -> str | None:
-    import subprocess
-    try:
-        r = subprocess.run(
-            ["git", "-C", project_path, "rev-parse", "--abbrev-ref", "HEAD"],
-            capture_output=True, text=True, timeout=10,
-        )
-    except (FileNotFoundError, subprocess.TimeoutExpired):
-        return None
-    return r.stdout.strip() if r.returncode == 0 else None
-
-
 def run_agent_command(command: str, argv: list[str]) -> int:
     """Delegates to that agent module's own main() — no duplication of its
     argument parsing or pretty-printing."""
@@ -169,7 +157,7 @@ class PipelineRunTracker:
 
 
 def run_full_pipeline(args: argparse.Namespace) -> int:
-    developer = args.developer or get_git_branch(args.project_path) or "unknown"
+    developer = args.developer or "unknown"
     start_time = datetime.now(timezone.utc)
     tracker = PipelineRunTracker(args.catalog, args.warehouse_id, args.profile)
     tracker.start(developer, developer, "run", args.max_retries)
@@ -271,7 +259,7 @@ def run_apply_fix(args: argparse.Namespace) -> int:
     agent = DiagnosticianAgent(
         project_path=args.project_path, profile=args.profile, catalog=args.catalog,
         warehouse_id=args.warehouse_id, dbt_target=args.dbt_target,
-        developer=args.developer or get_git_branch(args.project_path) or "unknown",
+        developer=args.developer or "unknown",
     )
     ok, message = agent.apply_recommended_fix(args.model_name)
     print(f"[{'APPLIED' if ok else 'FAILED'}] {args.model_name}: {message}")
@@ -344,7 +332,7 @@ def main() -> int:
         p.add_argument("--catalog", default=DEFAULT_CATALOG)
         p.add_argument("--warehouse-id", default=DEFAULT_WAREHOUSE_ID)
         p.add_argument("--dbt-target", default="dev")
-        p.add_argument("--developer", default=None, help="defaults to the project's git branch")
+        p.add_argument("--developer", default=None, help="defaults to 'unknown' if omitted")
         p.add_argument("--reset-workspace", action="store_true")
 
     run_p = sub.add_parser("run", help="Full pipeline, Preflight through Validator")

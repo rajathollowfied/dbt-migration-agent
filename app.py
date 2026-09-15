@@ -29,7 +29,7 @@ with st.sidebar:
     project_path = st.text_input(
         "Project path", help="Path to the Snowflake+dbt project to migrate (on this machine)",
     )
-    developer = st.text_input("Developer", value="", help="Defaults to the project's git branch if left blank")
+    developer = st.text_input("Developer", value="", help="Defaults to 'unknown' if left blank")
     profile = st.text_input(
         "Databricks CLI profile", value=DEFAULT_PROFILE or "",
         help="Blank uses the SDK's own default auth resolution (DATABRICKS_CONFIG_PROFILE env var, "

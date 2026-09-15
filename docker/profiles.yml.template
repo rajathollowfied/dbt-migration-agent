@@ -1,0 +1,18 @@
+# Baked into the image (Dockerfile) at a fixed path (~/.dbt/profiles.yml) --
+# contains no secrets itself, every value resolves from the container's own
+# environment at dbt-run time via Jinja env_var(). Matches
+# agents/common/config.py's env var names (DATABRICKS_WAREHOUSE_ID,
+# DBT_MIGRATION_CATALOG) plus the standard DATABRICKS_HOST/DATABRICKS_TOKEN
+# the SDK itself already reads -- one token var for both dbt and the SDK,
+# not two, unlike the local dev setup's separate DBT_DATABRICKS_TOKEN.
+DATABRICKS:
+  target: dev
+  outputs:
+    dev:
+      type: databricks
+      host: "{{ env_var('DATABRICKS_HOST') }}"
+      http_path: "/sql/1.0/warehouses/{{ env_var('DATABRICKS_WAREHOUSE_ID') }}"
+      token: "{{ env_var('DATABRICKS_TOKEN') }}"
+      catalog: "{{ env_var('DBT_MIGRATION_CATALOG', 'dbt_migration') }}"
+      schema: bronze
+      threads: 4

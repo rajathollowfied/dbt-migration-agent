@@ -1,0 +1,17 @@
+# Generated at runtime by the agents — regenerated on every run, not hand-
+# written source. Should be volume-mounted for persistence, not baked into
+# the image. Mirrors ../.gitignore for the same reasons.
+migration-workspace/
+output_databricks/
+reports/
+dbt_run_report.xlsx
+
+__pycache__/
+*.pyc
+.git/
+.claude/
+
+# Pre-agent manual-exploration debug artifacts, not part of the tool.
+run_errors_v*.txt
+compile_errors_raw.txt
+deps_output.txt

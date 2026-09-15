@@ -1,5 +1,19 @@
-databricks-sdk>=0.30.0
-dbt-databricks>=1.12.0
-pyyaml>=6.0
-openpyxl>=3.1.0
-streamlit>=1.38.0
+# Pinned exactly (not >=) to the versions already proven working together in
+# local dev this whole project. Loose >= constraints sent pip's resolver into
+# a combinatorial explosion trying to satisfy databricks-labs-lakebridge's own
+# many (often narrowly-bounded) transitive dependencies against everything
+# else — confirmed by a real failed build (ResolutionTooDeep, 200000 rounds).
+#
+# databricks-labs-lakebridge is deliberately NOT listed here — it's installed
+# in its own separate `pip install` step (see Dockerfile) because its own
+# transitive dependency (databricks-bb-analyzer) declares jsonschema~=4.0.0,
+# which conflicts with dbt-core's jsonschema>=4.19.1 under one unified
+# resolution (confirmed: ResolutionImpossible). Listing it here too would
+# make this file's own `pip install -r requirements.txt` re-trigger that same
+# joint-resolution conflict.
+databricks-sdk==0.85.0
+dbt-core==1.12.3
+dbt-databricks==1.12.5
+pyyaml==6.0.3
+openpyxl==3.1.5
+streamlit==1.56.0

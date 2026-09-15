@@ -239,38 +239,6 @@ class PreflightAgent:
             message="`dbt debug` passed — profile, connection, and dependencies OK",
         )
 
-    def check_git(self) -> CheckResult:
-        # git status is read from the ORIGINAL source path — .git is deliberately
-        # excluded from the migration-workspace copy (see agents/common/workspace.py).
-        try:
-            branch = subprocess.run(
-                ["git", "-C", str(self.source_path), "rev-parse", "--abbrev-ref", "HEAD"],
-                capture_output=True,
-                text=True,
-                timeout=10,
-            )
-        except (FileNotFoundError, subprocess.TimeoutExpired):
-            return CheckResult(
-                name="git",
-                status="warn",
-                message="Could not run git",
-                blocking=False,
-            )
-        if branch.returncode != 0:
-            return CheckResult(
-                name="git",
-                status="warn",
-                message=f"{self.source_path} is not a git repository — developer/branch audit fields will be blank",
-                blocking=False,
-            )
-        return CheckResult(
-            name="git",
-            status="pass",
-            message=f"On branch '{branch.stdout.strip()}'",
-            details={"branch": branch.stdout.strip()},
-            blocking=False,
-        )
-
     def fix_dbt_project_yml(self) -> list[str]:
         """Scan dbt_project.yml and remove Snowflake-only config entirely (never comment —
         comments inside Jinja {{ config() }} blocks break parsing, so Preflight is
@@ -324,7 +292,6 @@ class PreflightAgent:
             self.check_sql_warehouse(),
             self.check_audit_tables(),
             self.check_dbt_debug(),
-            self.check_git(),
         ]
         fixes = self.fix_dbt_project_yml()
 
