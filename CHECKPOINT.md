@@ -543,6 +543,83 @@ missing_source_data). Snapshot wiring is now fully confirmed end-to-end with
 a clean full-pipeline run, not just the standalone tests from the day
 before.
 
+## Deferred bundle/UI work — architecture pivot to external distribution (2026-09-15)
+
+Picked back up the deferred `databricks.yml`/Streamlit work. Investigated
+whether Lakebridge could run inside a Databricks Job task (needed if the
+pipeline were deployed as an on-platform Databricks Workflow):
+`databricks.labs.lakebridge.cli.transpile()` is a real, directly-callable
+Python function (takes a `WorkspaceClient` — same pattern this codebase
+already uses), so the `databricks` CLI subprocess dependency isn't a hard
+requirement. But the actual transpiler engine lives in a separate,
+**~1.25GB** local install (`~/.databricks/labs/lakebridge/` — a 1.1GB venv
+plus a 153MB source checkout) that `databricks labs install lakebridge`
+provisions, and that install flow is built around interactive prompts, not
+a clean headless/automatable path. Not a hard wall, but a genuine
+platform-provisioning problem with no clean answer yet (classic compute
+with a custom image, a Unity Catalog Volume holding a pre-provisioned
+install, or keeping Transpiler as a step outside the automated job).
+
+**Stepped back and reconsidered the goal, rather than solving that problem
+head-on — a real, deliberate architecture decision, not a stopgap.** The
+current architecture already works effortlessly specifically *because*
+nothing runs on Databricks compute: agents run locally, Databricks is used
+purely as a backend (SQL Warehouse for dbt + audit writes, Unity Catalog
+for storage, Model Serving for Diagnostician's LLM fallback). The
+Lakebridge-provisioning problem only exists in the scenario where the
+orchestration layer moves *onto* Databricks Job compute — a self-inflicted
+problem, not one inherent to the tool. Decided: **keep agents external,
+Databricks as backend-only** — drop the Databricks Workflow/Job deployment
+target entirely (not deferred, dropped) rather than solve a problem created
+by a goal that's no longer the goal.
+
+This reframes what "solidify it" means: not deploying *onto* Databricks,
+but making the *external* setup genuinely shareable — right now, using
+this tool requires an identically-set-up Linux machine (Lakebridge's
+~1.25GB install included) plus this repo, which is not a real distribution
+story. Confirmed Streamlit itself has zero platform dependency either way —
+it's a plain pip package (`streamlit run app.py` self-hosts anywhere, no
+tie to Databricks Apps), so it belongs in the same external environment as
+the agents, not built as a Databricks App.
+
+**Plan, in order:** (1) Docker + docker-compose — bakes the ~1.25GB
+Lakebridge install once at image-build time, so a new user needs Docker +
+their own credentials, not a replicated dev machine; solves the
+provisioning problem by moving it out of the shared-with-every-user path
+entirely. (2) Fix the credential story — `DBT_DATABRICKS_TOKEN` has been
+real friction all project (doesn't persist, manual regeneration every
+session); needs OAuth-based auth or auto-refresh, not a raw PAT. (3)
+Rewrite `SETUP.md` for the actual agent-based workflow (it's stale — still
+describes manual `sed`-based project fixups Preflight/Macro Resolver now
+automate, plus a stale open-items checklist). (4) Clean up tracked clutter
+(`run_errors_v2.txt` through `v10.txt`, `compile_errors_raw.txt`,
+`deps_output.txt`, `dbt_run_report.xlsx` — leftover pre-agent manual-
+exploration debug files, still git-tracked from the initial commit). (5)
+Streamlit UI, thin wrapper over the same agent classes `cli.py` already
+wraps, shipped in the same container.
+
+**Step (started) — remove hardcoded workspace defaults.** Every agent's
+`__init__` and CLI argparse defaulted `catalog`/`warehouse_id`/`profile` to
+THIS project's own workspace values (`dbt_migration`, `b05480be6edc2be5`,
+`free_community`) independently in all 8 agent files plus `cli.py` — ~48
+occurrences, a real blocker for "run with your own credentials." New
+`agents/common/config.py` centralizes these as env-var-driven defaults,
+using standard Databricks SDK/CLI env var names where they already exist
+(`DATABRICKS_CONFIG_PROFILE`, `DATABRICKS_WAREHOUSE_ID`) — a workspace
+already configured for the `databricks` CLI needs zero extra setup.
+`profile=None` now means "let the SDK's own default resolution decide"
+rather than forcing our profile name. `warehouse_id` has no generic
+fallback (inherently workspace-specific) — `required_warehouse_id()` fails
+loudly at the single `execute_sql()` choke point instead of failing
+obscurely deep in an HTTP call. `catalog` keeps `"dbt_migration"` as a
+generic default *name* (not a workspace identity). `transpiler.py`'s
+`run_lakebridge()` updated to omit `--profile` entirely when unset, instead
+of passing a literal `"None"` string to the subprocess. Verified end-to-end
+via env vars alone (no CLI flags): `cli.py status` correctly resolves all
+three and queries real data; unset `DATABRICKS_WAREHOUSE_ID` fails
+immediately with a clear, actionable error. Docker/compose (step 1) and the
+rest of the plan are next, not yet started.
+
 ## How to apply
 
 Before building the next agent, re-read this file plus the relevant
