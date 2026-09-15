@@ -620,6 +620,33 @@ three and queries real data; unset `DATABRICKS_WAREHOUSE_ID` fails
 immediately with a clear, actionable error. Docker/compose (step 1) and the
 rest of the plan are next, not yet started.
 
+**Streamlit UI built and tested locally before Docker** (reordered from the
+original plan — same "local first, bundle once stable" precedent already
+established for every agent, no reason the UI should be the exception;
+caught by the user, not planned that way originally). `app.py` is a thin
+wrapper over the exact same functions `cli.py` already wraps
+(`run_full_pipeline`/`run_agent_command`/`run_apply_fix`/`fetch_status`) —
+no new orchestration logic, just a live-log-streaming layer (stdout
+redirected into an `st.empty()` placeholder, updated incrementally on every
+write, since a full pipeline run can take 15-20 minutes) over what already
+works. Four tabs: full pipeline, individual agents (same partial/resume use
+case the CLI already supports via its own individual commands), apply-fix,
+status. Small supporting refactor in `cli.py`: extracted `fetch_status()`
+from `run_status()` so the CLI and the UI share the exact same audit-table
+queries instead of `app.py` re-deriving its own SQL.
+Verified for real, not just that it renders — `streamlit.testing.v1.AppTest`
+(Streamlit's own headless test harness; a plain `curl` only proves the
+server's JS shell loaded, not that the script executed without error, since
+Streamlit renders over websocket): zero exceptions on load, correct
+tab/widget rendering, sidebar correctly picks up the env-var-driven config
+defaults from the previous step, the Status tab's live DB query works
+end-to-end against real data, and a full UI-triggered Preflight run against
+the real sample project correctly live-streamed its log and reflected the
+actual result (NO-GO, from a real pre-existing `DBT_DATABRICKS_TOKEN`
+issue in that shell — not an app.py bug, a live demonstration of exactly
+the credential-story item already on the plan). `streamlit>=1.38.0` added
+to `requirements.txt`.
+
 ## How to apply
 
 Before building the next agent, re-read this file plus the relevant
