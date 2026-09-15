@@ -647,6 +647,97 @@ issue in that shell — not an app.py bug, a live demonstration of exactly
 the credential-story item already on the plan). `streamlit>=1.38.0` added
 to `requirements.txt`.
 
+## Dockerfile built and verified end-to-end (2026-09-15)
+
+Two decisions settled first (user, one at a time): (1) each user builds
+their own image with their own credentials — no shared pre-built image
+published; (2) plain env vars for runtime auth, not mounted credential
+files. In practice the build itself needed neither — see below.
+
+**Real, material discovery that simplified the whole design**: the
+`databricks labs install lakebridge` CLI flow I'd assumed was needed (the
+~1.25GB interactive install investigated in the earlier bundle/UI
+architecture pivot) is far more than what this project actually uses.
+Traced the actual `transpile` code path to `MorpheusInstaller` — its
+constructor takes no `WorkspaceClient` at all, and its `install()` is just
+a public Maven artifact download (`com.databricks.labs:databricks-morph-
+plugin`, ~68MB — confirmed via `du`). Verified live with every Databricks
+env var explicitly unset: installs cleanly, no credentials needed at all.
+`docker/install_morpheus.py` calls this installer directly in Python,
+bypassing the full CLI wizard entirely. Also checked Lakebridge's separate
+`analyze` command (asked directly) — confirmed unused by this project (our
+own Agent 4 is fully custom-built) and, even if it were used, backed by a
+plain pip package with no separate install step either.
+
+**Two real pip dependency-resolution failures hit and fixed while building
+for real:**
+1. Loose `>=` version constraints in `requirements.txt` sent pip's resolver
+   into a combinatorial explosion (`ResolutionTooDeep`, 200000 rounds)
+   trying to jointly satisfy `databricks-labs-lakebridge`'s many transitive
+   dependencies. Fixed by pinning every dependency to the exact versions
+   already proven working together in local dev (not just the same
+   *project*, the identical installed versions).
+2. Even pinned, one genuine conflict remained: `databricks-labs-lakebridge`'s
+   own transitive dependency (`databricks-bb-analyzer`) declares
+   `jsonschema~=4.0.0`, incompatible with `dbt-core`'s `jsonschema>=4.19.1`
+   under one unified resolution (confirmed: `ResolutionImpossible`). Yet
+   both already coexist fine in local dev at `jsonschema==4.26.0` — evidently
+   reached because local dev installed these across *separate* `pip install`
+   commands over time, and pip doesn't retroactively re-validate an earlier
+   package's constraint when a later command upgrades a shared dependency.
+   Reproduced that deliberately in the Dockerfile: `databricks-labs-
+   lakebridge` installed alone in its own `RUN` step first, then everything
+   else in a second step — same end state, done on purpose instead of by
+   accident.
+
+`docker/profiles.yml.template` is baked into the image with zero secrets —
+every value (`DATABRICKS_HOST`, `DATABRICKS_WAREHOUSE_ID`,
+`DATABRICKS_TOKEN`, `DBT_MIGRATION_CATALOG`) resolves from the container's
+own environment via Jinja `env_var()` at dbt-run time. Unified to one token
+var for both dbt and the SDK (`DATABRICKS_TOKEN`), not the two separate
+ones (`DBT_DATABRICKS_TOKEN` + SDK's own) local dev has used all project.
+
+**Dropped git-based developer/branch auto-detection entirely** (`cli.py`'s
+`get_git_branch`, `preflight.py`'s `check_git`) — prompted by the user
+questioning why the container needed `git` at all. Traced it to exactly one
+purpose: `AGENT_DESIGN.md`'s original multi-developer-on-one-shared-repo
+workflow (Section 9) — auto-tagging audit rows with the project's git
+branch so results from different developers didn't mix. That premise no
+longer holds now that each developer runs their own instance against their
+own project (this session's own architecture pivot) — any git-based merging
+of finalized migrated files happens entirely outside this tool, which never
+needed an opinion on git workflow to do its actual job. Removing it also
+eliminates a real, confirmed mount-ownership friction point: bind-mounting
+a host git repo into a root-owned container hits git's own dubious-
+ownership safety check (CVE-2022-24765, `fatal: detected dubious ownership
+in repository`) on every single run — reproduced and confirmed directly.
+`--developer` already had an explicit override with a graceful `"unknown"`
+fallback, so nothing about the actual pipeline regresses.
+
+**Real correction found immediately after, while re-verifying**: removing
+`git` from the image broke `dbt debug` itself — it has its own unconditional
+internal "required dependencies" check for the `git` binary being on PATH,
+entirely independent of our code and firing regardless of whether the
+project uses any git-sourced package. Confirmed by a real failed build:
+the actual Databricks connection succeeded (`Connection test: OK connection
+ok`) but `dbt debug` still reported `1 check failed: git`, which flipped
+our own *blocking* `check_dbt_debug()` to fail and Preflight to `NO-GO` for
+a reason completely unrelated to connectivity. Fix: `git` binary went back
+into the image — but purely as a system package for dbt's own internal
+check, which never touches the mounted project directory. Since our own
+code no longer runs `git -C <mounted-dir> ...` on anything, this does not
+reintroduce the ownership problem — confirmed live, `GO/NO-GO: GO` with
+`git` present and no ownership error anywhere.
+
+**Verified fully end-to-end against the real workspace, not just that it
+builds**: ran Preflight inside the container with a real project directory
+bind-mounted and real Databricks credentials passed as env vars only (no
+mounted credential files) — all 5 checks pass (workspace connectivity,
+Unity Catalog, SQL Warehouse, audit tables, `dbt debug`), `GO/NO-GO: GO`.
+`docker-compose.yml` and the remaining mount/volume decisions (project
+directory, `migration-workspace/`/`reports/` persistence, one service vs.
+two) are next, not yet settled.
+
 ## How to apply
 
 Before building the next agent, re-read this file plus the relevant
