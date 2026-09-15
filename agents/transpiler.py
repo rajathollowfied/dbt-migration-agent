@@ -72,6 +72,7 @@ from databricks.sdk.errors import DatabricksError
 
 from agents.analyzer import strip_sql_comments
 from agents.common.db import StatementError, execute_sql, get_client
+from agents.common.config import DEFAULT_CATALOG, DEFAULT_PROFILE, DEFAULT_WAREHOUSE_ID
 from agents.common.workspace import ensure_workspace_copy
 
 OUTPUT_ROOT = Path(__file__).resolve().parent.parent / "output_databricks"
@@ -217,26 +218,30 @@ def find_dropped_ctes(raw_sql: str, lb_output: str) -> list[str]:
     return dropped
 
 
-def run_lakebridge(input_dir: Path, output_dir: Path, profile: str, source_dialect: str = "snowflake") -> str:
+def run_lakebridge(input_dir: Path, output_dir: Path, profile: str | None, source_dialect: str = "snowflake") -> str:
     """Runs Lakebridge over the whole tree in one process. A non-zero exit here
     just means *some* files had parsing/analysis errors (Lakebridge's own
     per-file error count) — it still writes output for every file it could
     handle. Per-file success is determined by whether output exists for that
     file, not by this process's exit code.
+
+    `profile=None` (DATABRICKS_CONFIG_PROFILE unset) omits `--profile`
+    entirely and leaves the environment as-is, so the `databricks` CLI falls
+    back to its own default resolution (~/.databrickscfg [DEFAULT], or
+    DATABRICKS_HOST/DATABRICKS_TOKEN) — same convention as get_client().
     """
     env = dict(os.environ)
-    env["DATABRICKS_CONFIG_PROFILE"] = profile
-    proc = subprocess.run(
-        [
-            "databricks", "labs", "lakebridge", "transpile",
-            "--input-source", str(input_dir),
-            "--output-folder", str(output_dir),
-            "--source-dialect", source_dialect,
-            "--skip-validation", "true",
-            "--profile", profile,
-        ],
-        capture_output=True, text=True, timeout=600, env=env,
-    )
+    cmd = [
+        "databricks", "labs", "lakebridge", "transpile",
+        "--input-source", str(input_dir),
+        "--output-folder", str(output_dir),
+        "--source-dialect", source_dialect,
+        "--skip-validation", "true",
+    ]
+    if profile:
+        env["DATABRICKS_CONFIG_PROFILE"] = profile
+        cmd += ["--profile", profile]
+    proc = subprocess.run(cmd, capture_output=True, text=True, timeout=600, env=env)
     return proc.stdout + proc.stderr
 
 
@@ -271,9 +276,9 @@ class TranspilerAgent:
     def __init__(
         self,
         project_path: str,
-        profile: str = "free_community",
-        catalog: str = "dbt_migration",
-        warehouse_id: str = "b05480be6edc2be5",
+        profile: str | None = DEFAULT_PROFILE,
+        catalog: str = DEFAULT_CATALOG,
+        warehouse_id: str | None = DEFAULT_WAREHOUSE_ID,
         dbt_target: str = "dev",
         developer: str = "unknown",
         source_dialect: str = "snowflake",
@@ -483,9 +488,9 @@ class TranspilerAgent:
 def main() -> int:
     parser = argparse.ArgumentParser(description="Transpiler Agent")
     parser.add_argument("project_path")
-    parser.add_argument("--profile", default="free_community")
-    parser.add_argument("--catalog", default="dbt_migration")
-    parser.add_argument("--warehouse-id", default="b05480be6edc2be5")
+    parser.add_argument("--profile", default=DEFAULT_PROFILE)
+    parser.add_argument("--catalog", default=DEFAULT_CATALOG)
+    parser.add_argument("--warehouse-id", default=DEFAULT_WAREHOUSE_ID)
     parser.add_argument("--dbt-target", default="dev")
     parser.add_argument("--developer", default="unknown")
     parser.add_argument("--source-dialect", default="snowflake")

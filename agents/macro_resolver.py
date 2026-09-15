@@ -33,6 +33,7 @@ from databricks.sdk import WorkspaceClient
 from databricks.sdk.errors import DatabricksError
 
 from agents.common.db import StatementError, execute_sql, get_client
+from agents.common.config import DEFAULT_CATALOG, DEFAULT_PROFILE, DEFAULT_WAREHOUSE_ID
 from agents.common.workspace import ensure_workspace_copy
 
 # ---------------------------------------------------------------------------
@@ -717,9 +718,9 @@ class MacroResolverAgent:
     def __init__(
         self,
         project_path: str,
-        profile: str = "free_community",
-        catalog: str = "dbt_migration",
-        warehouse_id: str = "b05480be6edc2be5",
+        profile: str | None = DEFAULT_PROFILE,
+        catalog: str = DEFAULT_CATALOG,
+        warehouse_id: str | None = DEFAULT_WAREHOUSE_ID,
         dbt_target: str = "dev",
         apply_yml_fixes: bool = True,
         reset_workspace: bool = False,
@@ -881,9 +882,9 @@ class MacroResolverAgent:
 def main() -> int:
     parser = argparse.ArgumentParser(description="Macro Resolver Agent")
     parser.add_argument("project_path")
-    parser.add_argument("--profile", default="free_community")
-    parser.add_argument("--catalog", default="dbt_migration")
-    parser.add_argument("--warehouse-id", default="b05480be6edc2be5")
+    parser.add_argument("--profile", default=DEFAULT_PROFILE)
+    parser.add_argument("--catalog", default=DEFAULT_CATALOG)
+    parser.add_argument("--warehouse-id", default=DEFAULT_WAREHOUSE_ID)
     parser.add_argument("--dbt-target", default="dev")
     parser.add_argument("--no-yml-fixes", action="store_true")
     parser.add_argument("--reset-workspace", action="store_true")

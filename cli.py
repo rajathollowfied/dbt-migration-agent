@@ -46,6 +46,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from agents.analyzer import AnalyzerAgent
+from agents.common.config import DEFAULT_CATALOG, DEFAULT_PROFILE, DEFAULT_WAREHOUSE_ID
 from agents.common.db import StatementError, execute_sql, get_client
 from agents.data_loader import DataLoaderAgent
 from agents.diagnostician import DiagnosticianAgent
@@ -329,9 +330,9 @@ def main() -> int:
 
     def add_common(p):
         p.add_argument("project_path")
-        p.add_argument("--profile", default="free_community")
-        p.add_argument("--catalog", default="dbt_migration")
-        p.add_argument("--warehouse-id", default="b05480be6edc2be5")
+        p.add_argument("--profile", default=DEFAULT_PROFILE)
+        p.add_argument("--catalog", default=DEFAULT_CATALOG)
+        p.add_argument("--warehouse-id", default=DEFAULT_WAREHOUSE_ID)
         p.add_argument("--dbt-target", default="dev")
         p.add_argument("--developer", default=None, help="defaults to the project's git branch")
         p.add_argument("--reset-workspace", action="store_true")
@@ -341,9 +342,9 @@ def main() -> int:
     run_p.add_argument("--max-retries", type=int, default=3)
 
     status_p = sub.add_parser("status", help="Current run status from the audit tables")
-    status_p.add_argument("--profile", default="free_community")
-    status_p.add_argument("--catalog", default="dbt_migration")
-    status_p.add_argument("--warehouse-id", default="b05480be6edc2be5")
+    status_p.add_argument("--profile", default=DEFAULT_PROFILE)
+    status_p.add_argument("--catalog", default=DEFAULT_CATALOG)
+    status_p.add_argument("--warehouse-id", default=DEFAULT_WAREHOUSE_ID)
 
     apply_fix_p = sub.add_parser(
         "apply-fix", help="Apply a Diagnostician recommendation (advisory-only categories)",

@@ -13,6 +13,8 @@ from dataclasses import dataclass, field
 from databricks.sdk import WorkspaceClient
 from databricks.sdk.service.sql import StatementState
 
+from agents.common.config import required_warehouse_id
+
 
 class StatementError(RuntimeError):
     """Raised when a SQL statement fails or times out on the warehouse."""
@@ -42,7 +44,7 @@ def get_client(profile: str | None = None) -> WorkspaceClient:
 
 def execute_sql(
     client: WorkspaceClient,
-    warehouse_id: str,
+    warehouse_id: str | None,
     statement: str,
     catalog: str | None = None,
     schema: str | None = None,
@@ -54,7 +56,14 @@ def execute_sql(
     `wait_timeout` maxes out at 50s server-side; longer-running statements
     should be split or handled with async polling — not needed for the
     preflight/audit-table use cases this helper currently serves.
+
+    `warehouse_id` is typed as optional because callers now source it from
+    agents.common.config.DEFAULT_WAREHOUSE_ID, which is None when
+    DATABRICKS_WAREHOUSE_ID isn't set — validated here, the single choke
+    point every agent's SQL goes through, rather than at each of the many
+    call sites.
     """
+    warehouse_id = required_warehouse_id(warehouse_id)
     wait = min(timeout_seconds, 50)
     resp = client.statement_execution.execute_statement(
         warehouse_id=warehouse_id,
