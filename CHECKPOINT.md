@@ -734,9 +734,65 @@ builds**: ran Preflight inside the container with a real project directory
 bind-mounted and real Databricks credentials passed as env vars only (no
 mounted credential files) — all 5 checks pass (workspace connectivity,
 Unity Catalog, SQL Warehouse, audit tables, `dbt debug`), `GO/NO-GO: GO`.
-`docker-compose.yml` and the remaining mount/volume decisions (project
-directory, `migration-workspace/`/`reports/` persistence, one service vs.
-two) are next, not yet settled.
+
+## docker-compose.yml — the three remaining mount/volume decisions settled (2026-09-16)
+
+Settled one at a time, as usual:
+1. **One compose service** (`migration-agent`, running Streamlit), not a
+   separate `cli` service — `app.py` already calls `cli.py`'s functions
+   in-process, so pure-CLI usage works fine via `docker compose exec
+   migration-agent python3 cli.py ...` against the same container.
+2. **Bind mounts, not named volumes**, for `migration-workspace/`,
+   `output_databricks/`, `reports/` — real files on the host, directly
+   openable (an Excel report you can just double-click), matching how local
+   non-Docker usage already works.
+3. **Root user, accepting root-owned files** on those bind mounts, rather
+   than matching a non-root user to the host UID/GID. Talked through with
+   the user first: bind-mounted files a root container process creates are
+   genuinely, persistently root-owned on the host disk (not a runtime-only
+   illusion — same as running `sudo touch` yourself), which does require
+   `sudo` for a non-root host user to later delete/overwrite them. But host
+   `sudo` unconditionally overrides that regardless of who created the
+   files (a separate, more powerful privilege than anything happening
+   inside the container) — so the real cost is an occasional `sudo
+   chown`/`sudo rm`, not a functional blocker. Not worth the UID/GID-export
+   setup friction (`user: "${UID}:${GID}"`, which bash doesn't export GID
+   for by default) for every future user of the image. Confirmed live via
+   `stat` after a real compose run: `migration-workspace/project/` (written
+   by the container) came out `root:root`, exactly as predicted.
+
+The project's own path is bind-mounted from `PROJECT_PATH` (set in `.env`,
+templated in `.env.example`) to a fixed internal path, `/data/project`.
+`app.py`'s "Project path" sidebar field now reads its default from a new
+`DEFAULT_PROJECT_PATH` env var rather than hardcoding `/data/project`
+directly — compose sets it to `/data/project` so the field is pre-filled
+automatically inside the container, while local (non-Docker) `streamlit
+run app.py` leaves it unset and the field stays blank, exactly as before.
+`.env` itself (the filled-in real version, with a real token) is gitignored
+— only `.env.example` (the template) is committed.
+
+**Verified fully end-to-end**, not just `docker compose config`: `docker
+compose up -d` built and started cleanly, Streamlit answered on `:8501`
+(HTTP 200), the project bind mount was correctly populated (`ls
+/data/project` inside the container showed the real project's files), and
+a real Preflight run via `docker compose exec` against the actual sample
+project passed all 5 checks with `GO/NO-GO: GO` — the full local-dev
+Preflight result, now reproduced through the finished compose setup.
+
+Hit one real, unrelated environmental snag along the way: the `free_community`
+CLI profile's OAuth refresh token had expired between sessions
+(`Error: A new access token could not be retrieved because the refresh
+token is invalid`) — needed an interactive `databricks auth login
+--profile free_community` (browser-based, the user's own action, not
+scriptable) before testing could continue. Not a code issue, just a
+reminder that this profile's auth needs periodic manual refresh.
+
+This closes out step (1) of the distribution plan (Docker + docker-compose)
+from the earlier architecture-pivot entry above. Remaining steps from that
+plan, still not started: fixing the credential story more durably (OAuth or
+auto-refresh instead of a manually-regenerated token), rewriting `SETUP.md`
+for the actual agent-based/Docker workflow, and cleaning up the tracked
+pre-agent debug-artifact clutter (`run_errors_v2.txt`-`v10.txt`, etc.).
 
 ## How to apply
 
