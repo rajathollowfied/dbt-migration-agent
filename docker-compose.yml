@@ -1,0 +1,42 @@
+# One service (2026-09-15 decision) -- app.py already calls straight into
+# cli.py's own functions in-process, so pure-CLI usage doesn't need a
+# separate service: `docker compose exec migration-agent python cli.py ...`
+# runs any agent inside this same container.
+#
+# Runs as root (2026-09-15 decision) -- files this container writes into the
+# bind mounts below (reports/*.xlsx, migrated SQL) come out root-owned on
+# the host. That's a real, persistent property of the files, not a runtime
+# illusion -- but host `sudo` always overrides it unconditionally (a
+# completely separate, more powerful privilege than anything happening
+# inside the container), so the actual cost is just an occasional
+# `sudo chown`/`sudo rm` rather than a real blocker. The alternative (a
+# non-root user matched to your host UID/GID) avoids that but requires
+# exporting UID/GID before every `docker compose up` -- not worth the setup
+# friction for every user of the image for what `sudo` already solves.
+services:
+  migration-agent:
+    build: .
+    ports:
+      - "8501:8501"
+    environment:
+      # Same env var names agents/common/config.py and docker/profiles.yml.template
+      # already read -- set the real values in .env (see .env.example).
+      DATABRICKS_HOST: ${DATABRICKS_HOST}
+      DATABRICKS_TOKEN: ${DATABRICKS_TOKEN}
+      DATABRICKS_WAREHOUSE_ID: ${DATABRICKS_WAREHOUSE_ID}
+      DBT_MIGRATION_CATALOG: ${DBT_MIGRATION_CATALOG:-dbt_migration}
+      # Pre-fills the Streamlit sidebar's Project path field to where the
+      # bind mount below actually lands inside the container -- a fixed
+      # internal convention, not a per-user secret, so it's set here rather
+      # than required in .env.
+      DEFAULT_PROJECT_PATH: /data/project
+    volumes:
+      # Your own Snowflake+dbt project (input) -- set PROJECT_PATH in .env
+      # to its path on your host.
+      - ${PROJECT_PATH}:/data/project
+      # Agent working state and deliverables (output) -- bind-mounted, not
+      # named volumes, so reports/*.xlsx and the migrated code are real
+      # files you can open directly on your host, no `docker cp` needed.
+      - ./migration-workspace:/app/migration-workspace
+      - ./output_databricks:/app/output_databricks
+      - ./reports:/app/reports

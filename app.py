@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import argparse
 import io
+import os
 import sys
 
 import streamlit as st
@@ -27,7 +28,10 @@ st.title("dbt Snowflake → Databricks Migration Agent")
 with st.sidebar:
     st.header("Configuration")
     project_path = st.text_input(
-        "Project path", help="Path to the Snowflake+dbt project to migrate (on this machine)",
+        "Project path", value=os.environ.get("DEFAULT_PROJECT_PATH", ""),
+        help="Path to the Snowflake+dbt project to migrate. Inside the docker-compose "
+             "container this is pre-filled to the bind-mounted project's fixed path "
+             "(DEFAULT_PROJECT_PATH) — running locally, point it at any path on this machine.",
     )
     developer = st.text_input("Developer", value="", help="Defaults to 'unknown' if left blank")
     profile = st.text_input(
