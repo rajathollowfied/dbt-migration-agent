@@ -219,30 +219,82 @@ def find_dropped_ctes(raw_sql: str, lb_output: str) -> list[str]:
 
 
 def run_lakebridge(input_dir: Path, output_dir: Path, profile: str | None, source_dialect: str = "snowflake") -> str:
-    """Runs Lakebridge over the whole tree in one process. A non-zero exit here
-    just means *some* files had parsing/analysis errors (Lakebridge's own
-    per-file error count) — it still writes output for every file it could
-    handle. Per-file success is determined by whether output exists for that
-    file, not by this process's exit code.
+    """Runs Lakebridge over the whole tree in one process, via its own Python
+    API directly (databricks.labs.lakebridge.cli.transpile) rather than
+    shelling out to `databricks labs lakebridge transpile`.
 
-    `profile=None` (DATABRICKS_CONFIG_PROFILE unset) omits `--profile`
-    entirely and leaves the environment as-is, so the `databricks` CLI falls
-    back to its own default resolution (~/.databrickscfg [DEFAULT], or
+    Real bug found and fixed (2026-09-1x, see CHECKPOINT.md): the CLI
+    subprocess route depends on "lakebridge" being registered in the
+    `databricks` CLI's own separate installed-apps bookkeeping
+    (~/.databricks/labs/databrickslabs-repositories.json) — which
+    docker/install_morpheus.py never populates, since it installs the
+    transpiler engine artifact directly via Python, deliberately bypassing
+    the full interactive `databricks labs install lakebridge` flow (see that
+    file's own docstring for why). Confirmed empirically inside the Docker
+    image: the exact subprocess command fails with "unknown flag:
+    --input-source", silently no-oping Transpiler for every single file,
+    every run — the pipeline still "succeeds" (soft-fail by design) but
+    nothing actually gets transpiled. The Python API needs no such CLI
+    registration at all, since it talks to the transpiler engine directly.
+
+    Two explicit overrides are required, confirmed by two real crashes while
+    testing this: `error_file_path` and `transpiler_config_path` both
+    otherwise default to *workspace-stored* config
+    (ApplicationContext/Installation.load(), persisted against the
+    Databricks user, not the local machine) — since this reuses the same
+    Databricks user/workspace as local dev, a container run picked up local
+    dev's own previously-cached paths (a literal local-machine absolute path
+    leaked through and failed validation, since it doesn't exist in the
+    container). Resolving `transpiler_config_path` from the repository
+    (rather than hardcoding it) keeps this correct if the installed
+    transpiler's own internal directory layout ever changes.
+
+    A non-zero/error result here just means *some* files had parsing/
+    analysis errors (Lakebridge's own per-file error count) — it still
+    writes output for every file it could handle. Per-file success is
+    determined by whether output exists for that file (see
+    _transpile_directory), not by this succeeding cleanly.
+
+    `profile=None` builds a bare WorkspaceClient(), which falls back to the
+    SDK's own default auth resolution (~/.databrickscfg [DEFAULT], or
     DATABRICKS_HOST/DATABRICKS_TOKEN) — same convention as get_client().
     """
-    env = dict(os.environ)
-    cmd = [
-        "databricks", "labs", "lakebridge", "transpile",
-        "--input-source", str(input_dir),
-        "--output-folder", str(output_dir),
-        "--source-dialect", source_dialect,
-        "--skip-validation", "true",
-    ]
+    import io
+    from contextlib import redirect_stderr, redirect_stdout
+
+    from databricks.labs.lakebridge.cli import transpile as lakebridge_transpile
+    from databricks.labs.lakebridge.transpiler.repository import TranspilerRepository
+    from databricks.sdk import WorkspaceClient
+
     if profile:
-        env["DATABRICKS_CONFIG_PROFILE"] = profile
-        cmd += ["--profile", profile]
-    proc = subprocess.run(cmd, capture_output=True, text=True, timeout=600, env=env)
-    return proc.stdout + proc.stderr
+        os.environ["DATABRICKS_CONFIG_PROFILE"] = profile
+        client = WorkspaceClient(profile=profile)
+    else:
+        client = WorkspaceClient()
+
+    repo = TranspilerRepository.user_home()
+    error_file_path = output_dir.parent / f"_lakebridge_errors_{output_dir.name}.log"
+    error_file_path.parent.mkdir(parents=True, exist_ok=True)
+
+    buf = io.StringIO()
+    try:
+        with redirect_stdout(buf), redirect_stderr(buf):
+            lakebridge_transpile(
+                w=client,
+                source_dialect=source_dialect,
+                input_source=str(input_dir),
+                output_folder=str(output_dir),
+                error_file_path=str(error_file_path),
+                transpiler_config_path=str(repo.transpiler_config_path("Morpheus")),
+                skip_validation="true",
+            )
+    except Exception as e:  # noqa: BLE001 - surfaced as log text, same as a non-zero CLI exit was
+        buf.write(f"\nlakebridge transpile raised: {e}\n")
+
+    log = buf.getvalue()
+    if error_file_path.exists():
+        log += "\n" + error_file_path.read_text()
+    return log
 
 
 @dataclass

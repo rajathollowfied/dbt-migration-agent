@@ -7,8 +7,6 @@
 FROM python:3.12-slim
 
 # Java 21+ required by the Morpheus transpiler engine.
-# curl + unzip: the Databricks CLI installer script below needs both
-# (unzip isn't in python:3.12-slim by default — confirmed by a failed build).
 #
 # git is back (2026-09-15, after briefly removing it): our OWN code no
 # longer uses it at all (see agents/preflight.py / cli.py — the git-branch
@@ -26,17 +24,17 @@ FROM python:3.12-slim
 # nothing to do with connectivity. This is just the binary on PATH — dbt's
 # own check never touches the mounted project directory, so it doesn't
 # reintroduce the ownership problem our own removed git usage caused.
+#
+# No `databricks` CLI binary here (also removed 2026-09-1x, along with
+# run_lakebridge()'s subprocess call to it): it's no longer used by any of
+# our own code at all. Lakebridge now runs via its own Python API directly
+# (databricks.labs.lakebridge.cli.transpile) — see run_lakebridge()'s own
+# docstring in agents/transpiler.py for why the CLI subprocess route never
+# actually worked inside this image in the first place.
 RUN apt-get update && apt-get install -y --no-install-recommends \
         openjdk-21-jdk-headless \
-        curl \
-        unzip \
         git \
     && rm -rf /var/lib/apt/lists/*
-
-# Databricks CLI -- transpiler.py's run_lakebridge() shells out to
-# `databricks labs lakebridge transpile`. No credentials needed to install
-# the CLI binary itself, same as the Morpheus install below.
-RUN curl -fsSL https://raw.githubusercontent.com/databricks/setup-cli/main/install.sh | sh
 
 WORKDIR /app
 
@@ -58,6 +56,18 @@ RUN pip install --no-cache-dir -r requirements.txt
 # flow), and why it needs zero Databricks credentials.
 COPY docker/install_morpheus.py .
 RUN python install_morpheus.py && rm install_morpheus.py
+
+# databricks-labs-blueprint's own logging setup (imported transitively the
+# first time any databricks.labs.lakebridge module loads) calls
+# find_project_root(), which walks up from the importing file looking for a
+# pyproject.toml/setup.py — present in the git-clone-based `databricks labs
+# install lakebridge` layout this library normally expects, but never
+# present for a plain `pip install`, which is what this image uses (see
+# above). Confirmed by a real crash: NotADirectoryError: Cannot find
+# project root, on the very first import. An empty pyproject.toml dropped
+# at the lakebridge package's own root satisfies that walk-up search
+# without needing to fake a real project structure.
+RUN touch /usr/local/lib/python3.12/site-packages/databricks/labs/lakebridge/pyproject.toml
 
 # Generic dbt profile — no secrets baked in, every value resolves from the
 # container's own environment at dbt-run time. See the template's own header
