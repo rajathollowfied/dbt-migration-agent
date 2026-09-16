@@ -794,6 +794,88 @@ auto-refresh instead of a manually-regenerated token), rewriting `SETUP.md`
 for the actual agent-based/Docker workflow, and cleaning up the tracked
 pre-agent debug-artifact clutter (`run_errors_v2.txt`-`v10.txt`, etc.).
 
+## Transpiler was completely non-functional inside Docker — found and fixed (2026-09-16/17)
+
+Triggered via the Streamlit UI (user's own action, not mine): the first
+genuine full `cli.py run` through the finished docker-compose setup. This
+was also the first time Transpiler had ever actually been exercised inside
+Docker — every earlier container test was Preflight-only, which never
+touches Lakebridge at all.
+
+**Real, serious bug, confirmed empirically**: every single file in the
+whole project (41/41 non-Python models) came back `manual_review` with
+zero `success` — Lakebridge silently never transpiled anything, the entire
+run. Traced to `run_lakebridge()` shelling out to `databricks labs
+lakebridge transpile`, which depends on "lakebridge" being registered in
+the `databricks` CLI's own separate installed-apps bookkeeping
+(`~/.databricks/labs/databrickslabs-repositories.json`) —
+`docker/install_morpheus.py` never populates that, since it installs the
+transpiler engine artifact directly via Python, deliberately bypassing the
+full interactive `databricks labs install lakebridge` flow (see that
+step's own entry above for why). Ran the exact subprocess command by hand
+inside the container: `Error: unknown flag: --input-source`, falling back
+to generic CLI help — confirmed, not inferred.
+
+The path to finding this took a real, worthwhile detour: the odd content
+in `customer_cdc_stream.sql` initially looked like it might be the
+already-known CDF-fix regression (advisory-only fix wiped by a fresh
+Transpiler regenerate) or a Lakebridge version mismatch. Traced it properly
+via `output_databricks/` (showed pristine untranspiled content — Transpiler
+genuinely never touched it) versus the workspace copy (showed backtick/
+`TABLESAMPLE` conversions plus a `target.type != 'databricks'` wrapper
+neither Lakebridge nor our own `post_process()` would produce) — that
+turned out to be Diagnostician's own LLM fallback, correctly doing its job
+on raw untranspiled SQL after 3 exhausted retries, creatively (and
+incompletely) trying to fix the stream hooks itself. A real, useful
+reminder to verify root cause via artifacts rather than pattern-match
+against a prior hypothesis.
+
+**Fixed by switching `run_lakebridge()` to call
+`databricks.labs.lakebridge.cli.transpile()` directly in Python** instead
+of shelling out — needs no CLI registration at all, since it talks to the
+transpiler engine directly. Per the user's own instruction, confirmed via
+isolated manual tests inside the running container *before* touching any
+code: a single file, then a whole directory, both transpiled correctly.
+
+Two more real crashes surfaced and fixed while getting the direct call
+working:
+1. `databricks.labs.blueprint`'s logging setup calls `find_project_root()`
+   on first import of any lakebridge module — walks up from the importing
+   file looking for `pyproject.toml`/`setup.py`, present in the git-clone-
+   based `databricks labs install` layout this library normally expects,
+   never present for a plain `pip install` (which is what this image uses).
+   Fixed with an empty `pyproject.toml` dropped at the lakebridge package's
+   own root in the Dockerfile.
+2. `error_file_path` and `transpiler_config_path` both default to
+   *workspace-stored* config (`ApplicationContext`/`Installation.load()`,
+   persisted against the Databricks **user**, not the local machine) —
+   since this container reuses the same Databricks user as local dev, it
+   picked up local dev's own previously-cached paths (a literal local-
+   machine absolute path leaked through and failed validation inside the
+   container, where it obviously doesn't exist). Fixed by passing both
+   explicitly: `error_file_path` to a real container-local path,
+   `transpiler_config_path` resolved programmatically via
+   `TranspilerRepository.transpiler_config_path("Morpheus")` rather than
+   hardcoded (robust to the installed transpiler's own layout changing).
+
+Also removed the `databricks` CLI binary from the Dockerfile entirely —
+confirmed (`grep`) it's no longer used anywhere in this codebase once
+`run_lakebridge()` stopped shelling out to it. Smaller image, one less
+moving part, one less thing that could silently not work.
+
+**Verified fully end-to-end against the real project, not just that it
+compiles**: rebuilt the image, ran `cli.py transpile` through the
+container — reproduces the exact **33 success / 8 hard_stop / 2 skipped**
+result every local test this whole session has shown, plus a clean `dbt
+compile: OK` afterward (needed a fresh token first — the one in `.env` had
+simply expired, over an hour old, an unrelated environmental non-issue).
+
+**Not yet done**: re-run the *full* `cli.py run` through the fixed
+container (the one that surfaced this bug was against the broken
+Transpiler) to get genuinely fresh, trustworthy `pipeline_runs`/`model_runs`
+numbers — the 30/10/7 result recorded during this investigation should be
+treated as invalid, a symptom of the bug rather than real pipeline health.
+
 ## How to apply
 
 Before building the next agent, re-read this file plus the relevant
