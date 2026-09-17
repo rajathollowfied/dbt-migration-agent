@@ -14,7 +14,9 @@ from __future__ import annotations
 import argparse
 import io
 import os
+import re
 import sys
+from datetime import datetime
 from pathlib import Path
 
 # app.py lives in scripts/, but agents/ is a sibling of scripts/'s parent —
@@ -76,33 +78,69 @@ def build_args(**overrides) -> argparse.Namespace:
     return argparse.Namespace(**base)
 
 
+LOG_DIR = Path(__file__).resolve().parent.parent / "logs"
+LOG_DIR.mkdir(parents=True, exist_ok=True)
+
+
 class _StreamlitLogWriter(io.TextIOBase):
     """Mirrors stdout writes into a Streamlit placeholder as they happen, so a
     long-running agent's progress is visible live instead of appearing all at
-    once when it finishes (a full pipeline run can take 15-20 minutes)."""
+    once when it finishes (a full pipeline run can take 15-20 minutes).
 
-    def __init__(self, placeholder):
+    Also mirrors into st.session_state (keyed by `session_key`) and a log file
+    on disk -- a plain local buffer disappears the moment Streamlit reruns the
+    script (switching tabs, touching any other widget), since a full rerun
+    re-executes this whole file from scratch with fresh local variables.
+    session_state survives that; the file survives past the browser session
+    entirely, for debugging after the fact.
+    """
+
+    def __init__(self, placeholder, session_key: str, log_file: Path):
         self.placeholder = placeholder
+        self.session_key = session_key
         self.buffer = ""
+        self._fh = open(log_file, "a")
 
     def write(self, s: str) -> int:
         self.buffer += s
+        st.session_state[self.session_key] = self.buffer
         self.placeholder.code(self.buffer[-8000:] or " ")
+        self._fh.write(s)
+        self._fh.flush()
         return len(s)
 
     def flush(self) -> None:
         pass
 
+    def close(self) -> None:
+        self._fh.close()
 
-def run_with_live_log(fn, *fn_args, **fn_kwargs):
+
+def render_persistent_log(session_key: str):
+    """Call once near the top of a tab, before its button -- restores the
+    last run's log from session_state on every rerun (e.g. after switching to
+    a different tab and back), instead of showing a blank placeholder until
+    the button is clicked again. Returns the placeholder to hand to
+    run_with_live_log for a fresh run."""
     placeholder = st.empty()
-    writer = _StreamlitLogWriter(placeholder)
+    existing = st.session_state.get(session_key)
+    if existing:
+        placeholder.code(existing[-8000:])
+    return placeholder
+
+
+def run_with_live_log(fn, *fn_args, placeholder, session_key: str, log_name: str, **fn_kwargs):
+    st.session_state[session_key] = ""  # fresh display for this run; the log FILE still gets its own timestamped name below, so history across runs isn't lost
+    safe_log_name = re.sub(r"[^A-Za-z0-9_-]", "_", log_name)  # log_name can come from free-text input (e.g. model_name) -- keep it a safe filename component
+    log_file = LOG_DIR / f"{safe_log_name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
+    writer = _StreamlitLogWriter(placeholder, session_key, log_file)
     old_stdout = sys.stdout
     sys.stdout = writer
     try:
         return fn(*fn_args, **fn_kwargs)
     finally:
         sys.stdout = old_stdout
+        writer.close()
 
 
 tab_run, tab_agents, tab_fix, tab_status = st.tabs(
@@ -111,11 +149,15 @@ tab_run, tab_agents, tab_fix, tab_status = st.tabs(
 
 with tab_run:
     st.write("Runs Preflight through Validator end-to-end — identical to `cli.py run`.")
+    log_placeholder = render_persistent_log("log_run_full_pipeline")
     if st.button("Run full pipeline", type="primary", disabled=not project_path):
         with st.status("Running full pipeline...", expanded=True) as status_box:
             args = build_args()
             try:
-                rc = run_with_live_log(cli.run_full_pipeline, args)
+                rc = run_with_live_log(
+                    cli.run_full_pipeline, args,
+                    placeholder=log_placeholder, session_key="log_run_full_pipeline", log_name="run_full_pipeline",
+                )
             except Exception as e:
                 status_box.update(label=f"Pipeline errored: {e}", state="error")
             else:
@@ -128,6 +170,7 @@ with tab_agents:
     st.write("Runs exactly one agent — identical to `cli.py <agent>`. Same interim/resume use case "
              "as the CLI: `run` above is always full-pipeline, use this to retry just one step.")
     agent_choice = st.selectbox("Agent", list(cli.AGENT_MODULES.keys()))
+    log_placeholder = render_persistent_log(f"log_agent_{agent_choice}")
     if st.button(f"Run {agent_choice}", disabled=not project_path):
         argv = [project_path, "--catalog", catalog, "--dbt-target", dbt_target]
         if profile:
@@ -140,7 +183,10 @@ with tab_agents:
             argv.append("--reset-workspace")
         with st.status(f"Running {agent_choice}...", expanded=True) as status_box:
             try:
-                rc = run_with_live_log(cli.run_agent_command, agent_choice, argv)
+                rc = run_with_live_log(
+                    cli.run_agent_command, agent_choice, argv,
+                    placeholder=log_placeholder, session_key=f"log_agent_{agent_choice}", log_name=f"agent_{agent_choice}",
+                )
             except Exception as e:
                 status_box.update(label=f"{agent_choice} errored: {e}", state="error")
             else:
@@ -157,11 +203,15 @@ with tab_fix:
         "recommendation to apply — see CHECKPOINT.md 'Advisory-then-apply workflow'."
     )
     model_name = st.text_input("Model name")
+    log_placeholder = render_persistent_log("log_apply_fix")
     if st.button("Apply fix", disabled=not (project_path and model_name)):
         args = build_args(model_name=model_name)
         with st.status(f"Applying fix for {model_name}...", expanded=True) as status_box:
             try:
-                rc = run_with_live_log(cli.run_apply_fix, args)
+                rc = run_with_live_log(
+                    cli.run_apply_fix, args,
+                    placeholder=log_placeholder, session_key="log_apply_fix", log_name=f"apply_fix_{model_name}",
+                )
             except Exception as e:
                 status_box.update(label=f"Apply-fix errored: {e}", state="error")
             else:

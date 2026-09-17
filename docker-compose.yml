@@ -40,3 +40,8 @@ services:
       - ./migration-workspace:/app/migration-workspace
       - ./output_databricks:/app/output_databricks
       - ./reports:/app/reports
+      # Streamlit UI's run logs (scripts/app.py) -- one file per run,
+      # survives both a container restart and the Streamlit session ending,
+      # since the UI's own live log display is otherwise lost on any
+      # Streamlit rerun (switching tabs, touching another widget).
+      - ./logs:/app/logs

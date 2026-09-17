@@ -4,6 +4,7 @@
 migration-workspace/
 output_databricks/
 reports/
+logs/
 
 __pycache__/
 *.pyc
@@ -22,3 +23,4 @@ trash/
 # runtime (confirmed: no code opens/reads a .md file). No reason to ship
 # them in the image.
 *.md
+screenshots/

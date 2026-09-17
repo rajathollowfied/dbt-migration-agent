@@ -1227,3 +1227,68 @@ workspace copy (the norm during active development, since re-running is
 faster) can hide it indefinitely — a real argument for periodically
 testing against a truly fresh clone, not just trusting a rerun of local
 state.
+
+## UI logs preserved across tab switches + persisted to disk; screenshots added (2026-09-17)
+
+Four more observations from the user's own fresh-clone walkthrough,
+handled individually:
+
+1. **Streamlit UI log disappearing on tab switch** — real bug, root cause
+   confirmed in `scripts/app.py`: the live log lived only in a local
+   `_StreamlitLogWriter.buffer` variable inside `run_with_live_log()`.
+   Streamlit reruns the *entire* script on any interaction (not just the
+   button that started a run), which re-executes the whole file top to
+   bottom and recreates every `st.empty()` placeholder from scratch —
+   there was nothing to restore from. Fixed two ways: (a) the writer now
+   also mirrors every write into `st.session_state` (keyed per tab/agent),
+   and a new `render_persistent_log()` runs at the top of each tab, before
+   its button, to redraw the last run's content from session_state on
+   every rerun instead of showing blank until re-clicked; (b) every run
+   also writes to a real file under a new `logs/` directory
+   (`<name>_<timestamp>.log`), bind-mounted via `docker-compose.yml` same
+   as `reports/`/`output_databricks/`, so it survives past the browser
+   session and a container restart, for actual post-hoc debugging.
+   Verified for real via `AppTest`, not just re-reading the diff: drove an
+   actual Preflight run through the UI harness, confirmed the log
+   persisted in `session_state` AND the rendered `code` element across an
+   explicit extra rerun with no button click (exactly what a tab switch
+   does), and confirmed two separate real runs produced two distinct,
+   individually-correct timestamped log files on disk with no
+   cross-contamination between them. Verified inside the rebuilt container
+   too (`logs/` bind mount confirmed writable).
+2. **`apply-fix` for `stream_error` — "nothing in output_databricks or
+   reports"** — not a bug, a wrong-place-to-look. Confirmed via
+   `agents/diagnostician.py`'s `apply_recommended_fix()`: it writes
+   directly to files inside the workspace copy (`migration-workspace/`)
+   and re-runs a targeted `dbt run --select <model>` against the real
+   warehouse — it never touches `output_databricks/` (Transpiler-only) or
+   `reports/` (Executor's own Excel-report step only, which a standalone
+   apply-fix call doesn't trigger). Confirmed via the actual audit table
+   (`pattern_library`) that the user's fix genuinely applied and changed
+   `models/bronze/run/customer_cdc_stream.sql`. Real gap worth fixing
+   later (not done yet): `apply_recommended_fix()`'s own success message
+   doesn't say *where* the changed file lives, which is exactly what
+   caused the confusion.
+3. **`trash/` shouldn't be in the repo** — raised again, not yet acted on;
+   still pending the user's explicit go-ahead to delete (asked once
+   already, no confirmation yet either way).
+4. **Apply Fix tab's description hardcodes "stream_error"** — confirmed,
+   visible directly in the user's own `hardStopFix.png` screenshot text.
+   User explicitly deferred discussing the real fix ("we'll discuss it
+   proper later") — noted, not touched this round.
+
+Also added three real screenshots (`screenshots/fullFirstRun.png`,
+`statusTab.png`, `hardStopFix.png`, from the user's own walkthrough) to
+`README.md`'s new Screenshots section, and excluded `screenshots/` from
+the Docker image (`.dockerignore`) — pure documentation, not needed at
+runtime, same reasoning as the `*.md` exclusion.
+
+## How to apply
+
+When something is missing from an expected output location, check which
+agent actually owns that location before assuming a bug — this project
+has three separate, non-overlapping output surfaces
+(`output_databricks/` = Transpiler only, `reports/` = Executor's Excel
+step only, the workspace copy under `migration-workspace/` = everything
+else, including Diagnostician's `apply-fix`) and a user (reasonably)
+expects one unified "where did my change go" answer.

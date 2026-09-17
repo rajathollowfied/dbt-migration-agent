@@ -49,6 +49,24 @@ individual/full-pipeline commands via
 Full setup details, credential handling, and a local-development path (for
 working on the agents themselves) are in [SETUP.md](SETUP.md).
 
+## Screenshots
+
+**Run Full Pipeline** — a full end-to-end run (Preflight through Validator)
+via the Streamlit UI, identical to `cli.py run`:
+
+![Full pipeline run](screenshots/fullFirstRun.png)
+
+**Status** — latest pipeline run summary and the current human review
+queue, pulled live from the Databricks audit tables:
+
+![Status tab](screenshots/statusTab.png)
+
+**Apply Fix** — applying a Diagnostician recommendation (here, the
+Snowflake Streams → Delta CDF redesign for a `stream_error` hard-stop) and
+re-verifying it against the real warehouse:
+
+![Apply Fix tab](screenshots/hardStopFix.png)
+
 ## Status
 
 Built and validated end-to-end against a real TPC-H-based Snowflake+dbt
