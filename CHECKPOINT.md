@@ -934,6 +934,26 @@ separate, not-yet-done cleanup.
 
 Whenever adding a new local file that might land at the `dbt-migration-agent/` root (scratch output, a new debug dump, a new credentials file), check `.dockerignore` covers it — don't assume a glob pattern written for one filename generalizes to a similarly-named one. For anything credential-shaped specifically, verify with `docker compose exec ... ls -la /app/` after a rebuild rather than trusting the ignore file's intent.
 
+## `.md` docs excluded from the image; Status tab "Invalid Token" was just an expired token (2026-09-17)
+
+Two quick follow-ups from the same sync-check thread. (1) User asked
+whether the `.md` docs really need to ship in the image — confirmed via
+`grep` that no agent/`scripts/` code opens/reads a `.md` file at runtime
+(only comment references to filenames), so added `*.md` to
+`.dockerignore`. (2) User reported the Streamlit Status tab failing with
+`403 Forbidden < Invalid Token` from the SQL Warehouse API — not a code
+bug, the `.env` token had simply expired again (decoded its JWT `exp`
+claim directly: expired over an hour earlier), the same recurring ~1hr-TTL
+friction from earlier this session. Regenerated via `databricks auth token
+--profile free_community`, rebuilt (to fold in the `.dockerignore`
+change), and confirmed the status query now runs cleanly through the
+container (correctly reports "no pipeline runs recorded yet" — the audit
+table is genuinely empty, not an error).
+
+Still the single biggest recurring friction point this whole project —
+next real fix (not yet started) is OAuth/auto-refresh instead of manual
+`databricks auth token` regen every ~hour.
+
 ## `app.py`/`cli.py` moved into `scripts/` (2026-09-17)
 
 User asked to move both entry-point files into `scripts/` (already home to
