@@ -1145,3 +1145,38 @@ and tracked-clutter cleanup are all done. Remaining open items are the
 smaller ones noted along the way (Transpiler per-file resume for very
 large projects, deferred; Podman/Windows portability, unverified but
 expected to work).
+
+## First public push — README.md added, repo split out via `git subtree` (2026-09-17)
+
+Added `README.md` (front-door instructions: what the tool does, the 8
+agents at a glance, quick start, status/requirements) and pushed this
+directory's history to its own GitHub repo:
+https://github.com/rajathollowfied/dbt-migration-agent
+
+This local repo is rooted one level up (`dbt_migration/`, also containing
+`CLAUDE.md`, gitignored `snowflake-dbt-demo/`, etc.), but the GitHub repo
+is named for just this subdirectory — confirmed with the user that the
+new repo's root should BE `dbt-migration-agent/`'s content directly, not
+have it nested a level down. Used `git subtree split --prefix=dbt-migration-agent
+-b dbt-migration-agent-export` to extract a branch with history rewritten
+so this subdirectory becomes the root (only commits touching this path,
+full history preserved for those), verified the resulting tree before
+pushing (no `.env`, no `SETUP.md.bak`, no parent-repo files leaked in,
+`trash/*.txt` present as expected per the earlier explicit decision to
+keep those tracked-but-image-excluded), then pushed to
+`git@github.com:rajathollowfied/dbt-migration-agent.git` (SSH — HTTPS
+push failed with no credential helper configured; SSH auth was already
+set up for this GitHub account).
+
+Confirmed with the user beforehand: full history stays public (workspace
+host/profile/warehouse-ID mentions throughout `CHECKPOINT.md` are real
+identifying details but not secrets — no token is ever committed, `.env`
+is gitignored and confirmed absent from every push).
+
+The local `dbt-migration-agent-repo` remote and `dbt-migration-agent-export`
+branch stay in this monorepo for future updates — re-run the same
+`subtree split` + `push` sequence to sync new commits (the split is fast,
+~27 commits took well under a second).
+
+No LICENSE file exists yet — worth adding before treating this as a real
+public release, not something to default silently on.
