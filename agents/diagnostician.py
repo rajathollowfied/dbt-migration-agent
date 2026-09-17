@@ -47,7 +47,7 @@ from pathlib import Path
 from databricks.sdk.errors import DatabricksError
 from databricks.sdk.service.serving import ChatMessage, ChatMessageRole
 
-from agents.common.db import StatementError, execute_sql, get_client
+from agents.common.db import StatementError, execute_sql, get_client, raise_if_auth_error
 from agents.common.config import DEFAULT_CATALOG, DEFAULT_PROFILE, DEFAULT_WAREHOUSE_ID
 from agents.common.workspace import ensure_workspace_copy
 from agents.transpiler import post_process
@@ -362,11 +362,15 @@ def apply_llm_fix(client, sql: str, error_message: str) -> tuple[str, str]:
         f"Databricks error:\n{error_message}\n\n"
         f"Current SQL file:\n{sql}"
     )
-    resp = client.serving_endpoints.query(
-        name=LLM_ENDPOINT,
-        messages=[ChatMessage(role=ChatMessageRole.USER, content=prompt)],
-        max_tokens=4000,
-    )
+    try:
+        resp = client.serving_endpoints.query(
+            name=LLM_ENDPOINT,
+            messages=[ChatMessage(role=ChatMessageRole.USER, content=prompt)],
+            max_tokens=4000,
+        )
+    except Exception as e:
+        raise_if_auth_error(e)
+        raise
     fixed = extract_text_response(resp.choices[0].message.content).strip()
     if fixed.startswith("```"):
         fixed = re.sub(r"^```[a-zA-Z]*\n|\n```$", "", fixed)

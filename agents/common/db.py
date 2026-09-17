@@ -11,6 +11,7 @@ import os
 from dataclasses import dataclass, field
 
 from databricks.sdk import WorkspaceClient
+from databricks.sdk.errors import PermissionDenied, Unauthenticated
 from databricks.sdk.service.sql import StatementState
 
 from agents.common.config import required_warehouse_id
@@ -18,6 +19,64 @@ from agents.common.config import required_warehouse_id
 
 class StatementError(RuntimeError):
     """Raised when a SQL statement fails or times out on the warehouse."""
+
+
+class DatabricksAuthError(RuntimeError):
+    """Raised when a Databricks API call fails because the credential itself
+    is expired/invalid, not because of anything about the request. Deliberately
+    NOT a StatementError subclass -- several agents `except StatementError` to
+    soft-fail one check and keep going (validator.py, data_loader.py, preflight.py),
+    and a dead credential should stop the run loudly, not be absorbed as if it
+    were one failed check among many.
+    """
+
+
+# Message-text fallback for cases the SDK doesn't raise as a clean typed
+# error -- confirmed empirically this happens (an expired-but-well-formed
+# JWT produced an unparseable-response error the SDK itself couldn't map to
+# Unauthenticated/PermissionDenied, per the literal "this is likely a bug in
+# the SDK" text it prints). Checking exception TYPE alone isn't enough --
+# tested a garbage/malformed token and it came back as Unauthenticated with
+# message text containing none of "401"/"403"/"invalid token", so this list
+# is deliberately broader than just the HTTP-code strings.
+_AUTH_ERROR_SIGNALS = (
+    "403",
+    "401",
+    "invalid token",
+    "invalid access token",
+    "unauthenticated",
+    "permissiondenied",
+    "credential was not sent",
+    "unable to parse response",
+)
+
+
+def raise_if_auth_error(exc: Exception) -> None:
+    """Re-raise `exc` as a DatabricksAuthError with an actionable message if it
+    looks like an expired/invalid credential (a 401/403, or the SDK's own
+    "unable to parse response" wrapper around one -- confirmed this is exactly
+    what an expired token minted via `databricks auth token` looks like from
+    this codebase's own call sites). Callers should call this in an `except
+    Exception as e:` block and re-raise the original `e` themselves if this
+    returns without raising -- it's a no-op for anything that isn't an auth
+    problem.
+    """
+    if isinstance(exc, (Unauthenticated, PermissionDenied)):
+        _raise_auth_error(exc)
+    text = str(exc).lower()
+    if any(signal in text for signal in _AUTH_ERROR_SIGNALS):
+        _raise_auth_error(exc)
+
+
+def _raise_auth_error(exc: Exception) -> None:
+    raise DatabricksAuthError(
+        "Databricks credentials look expired or invalid (saw a 401/403 from "
+        "the API). If DATABRICKS_TOKEN was minted via `databricks auth token`, "
+        "it's short-lived by design and this is almost always just that -- run "
+        "`docker/refresh_token.sh <profile>` on your HOST machine, then restart "
+        "the container (`docker compose up -d`), and retry.\n"
+        f"Original error: {exc}"
+    ) from exc
 
 
 @dataclass
@@ -65,13 +124,17 @@ def execute_sql(
     """
     warehouse_id = required_warehouse_id(warehouse_id)
     wait = min(timeout_seconds, 50)
-    resp = client.statement_execution.execute_statement(
-        warehouse_id=warehouse_id,
-        statement=statement,
-        catalog=catalog,
-        schema=schema,
-        wait_timeout=f"{wait}s",
-    )
+    try:
+        resp = client.statement_execution.execute_statement(
+            warehouse_id=warehouse_id,
+            statement=statement,
+            catalog=catalog,
+            schema=schema,
+            wait_timeout=f"{wait}s",
+        )
+    except Exception as e:
+        raise_if_auth_error(e)
+        raise
 
     status = resp.status
     if status and status.state == StatementState.FAILED:

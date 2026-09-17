@@ -1014,3 +1014,89 @@ which a plain `python3 scripts/app.py` invocation wouldn't have surfaced).
 The pre-agent manual-exploration artifacts flagged since the architecture-pivot plan (`run_errors_v2.txt`-`v10.txt`, `run_errors_raw.txt`, `compile_errors_raw.txt`, `deps_output.txt`, plus the stale root-level `dbt_run_report.xlsx` predating the Executor's own `reports/<run_id>.xlsx` output) moved into a new `dbt-migration-agent/trash/` folder rather than deleted outright, per user's explicit choice. `dbt_run_report.xlsx` stays gitignored (path updated in the root `.gitignore` to `dbt-migration-agent/trash/dbt_run_report.xlsx`); everything else is a normal tracked `git mv`.
 
 `.dockerignore`'s individual `run_errors_v*.txt` / `run_errors_raw.txt` / `compile_errors_raw.txt` / `deps_output.txt` / `dbt_run_report.xlsx` patterns collapsed into a single `trash/` directory exclude. Verified via rebuild + `docker compose exec migration-agent ls /app/trash` (no such directory) and `ls /app/` (only real source/config left) — no debug clutter reaches the image anymore, by construction rather than by enumerating filenames.
+
+## Credential-refresh friction addressed: host-side refresh script + a real DatabricksAuthError, not OAuth M2M (2026-09-17)
+
+Picked up the "credential story" loose end. First explored OAuth M2M (a
+Service Principal with client_id/client_secret — the standard container-
+native pattern, zero manual refresh ever). Confirmed this Free Edition
+workspace supports it (`databricks service-principals list` works). User
+correctly rejected building the tool's core credential story around it
+though — **not every end user of this tool will have permission to create
+a service principal in their own workspace**, and this tool's whole point
+is generalizing to any Snowflake→Databricks migration, not just this dev
+setup. Right call — mirrors the same reasoning that kept catalog/warehouse
+env-var-driven instead of hardcoded earlier this project.
+
+Landed on two things instead, keeping the PAT/token flow as the universal
+baseline that needs zero special permissions:
+
+1. **`docker/refresh_token.sh`** — a HOST-side (not container) helper.
+   Runs `databricks auth token --profile <profile>`, writes the fresh
+   access token into `.env`'s `DATABRICKS_TOKEN`, and prints a reminder to
+   restart the container. Purely a convenience for users on OAuth-login
+   profiles (short-lived tokens); a real static PAT never needs this.
+   **Real bug found via testing**: first version merged stderr into the
+   captured JSON (`2>&1`) — worked on a clean run but failed once with a
+   `JSONDecodeError` on empty input, most likely a stray stderr line on a
+   cold OAuth refresh (Free Edition has shown transient API hiccups
+   before). Fixed by capturing stdout only and letting stderr pass through
+   to the terminal naturally, rather than trying to explain the one-off
+   and hoping it doesn't recur.
+
+2. **`DatabricksAuthError`** (`agents/common/db.py`) — the actual "don't
+   let the user get sidetracked" fix. The Status-tab bug from earlier this
+   session showed the real cost: even *I* had to investigate a `403
+   Forbidden < Invalid Token` as a possible code bug before recognizing it
+   was just an expired token — that's exactly the trap an end user would
+   fall into. Added `raise_if_auth_error()`, called at the two places a
+   Databricks API call can hit a dead credential (`execute_sql()`'s
+   `execute_statement()` call — the shared choke point every agent's SQL
+   goes through; and Diagnostician's `serving_endpoints.query()` LLM
+   fallback call). Detects the failure via `isinstance` against the SDK's
+   own `Unauthenticated`/`PermissionDenied` types AND a message-text
+   fallback, and re-raises a `DatabricksAuthError` with the exact fix
+   command, instead of letting the SDK's own cryptic wrapper surface as-is.
+   **Deliberately NOT a `StatementError` subclass** — `validator.py`,
+   `data_loader.py`, and `preflight.py` all `except StatementError` to
+   soft-fail one check and keep going; if a dead credential were wrapped
+   as a `StatementError` too, those handlers would silently absorb "your
+   whole credential is dead" as if it were just one failed check among
+   many, which is worse than a loud crash.
+   **Real bug found via testing, not assumed correct**: first version only
+   matched on message-text substrings like `"403"`/`"401"`/`"invalid
+   token"`. Tested against a deliberately garbage token and got back an
+   `Unauthenticated`-typed exception whose message body
+   ("Credential was not sent or was of an unsupported type...") contained
+   NONE of those substrings — the class name isn't in `str(exc)`. Fixed by
+   checking `isinstance(exc, (Unauthenticated, PermissionDenied))` first,
+   keeping the string-match list as a fallback (needed separately — a
+   real *expired* JWT reproduced the original "unable to parse response...
+   likely a bug in the SDK" wording, which the SDK apparently doesn't map
+   to either typed exception). Verified all three cases: garbage token
+   (`Unauthenticated`, caught), a genuinely-expired real JWT (message-text
+   fallback, caught — this reproduced by accident when an earlier "fresh"
+   token from this same session expired again mid-testing), and a valid
+   token (no false positive, 3 consecutive successful queries).
+   Verified inside the actual container too, not just locally.
+
+**Deferred (user's explicit call, revisit if it becomes a real problem)**:
+per-file skip/resume in Transpiler for very large projects (2K+ models) —
+today it always reinvokes Lakebridge over the *entire* `models/` tree on
+every call (confirmed via code: `run_lakebridge()` takes a whole
+`input_dir`, no per-file "already done, skip" check against
+`output_databricks/`). Not unsafe (fully idempotent, a redo just produces
+byte-identical output) but wasteful at scale if a huge batch fails near
+the end. If this becomes real, the fix to explore is running Transpiler in
+chunks rather than one giant invocation — check whether Lakebridge's own
+API supports a file subset/batch boundary before building custom
+skip-logic on our side.
+
+## How to apply
+
+When adding any detection heuristic for a third-party SDK's error shape
+(auth failures, rate limits, whatever), test against the SDK's actual
+exception instances, not just plausible-looking message text — this
+session hit two different exception shapes for what looked like "the same
+kind of failure" (a malformed token vs. a genuinely expired one), and a
+heuristic tuned against only one of them silently misses the other.
