@@ -59,10 +59,17 @@ a live warehouse, not assumed from docs. See
 what broke, and how it was fixed; [FINDINGS.md](FINDINGS.md) and
 [MACRO_ANALYSIS.md](MACRO_ANALYSIS.md) for the specific migration patterns
 discovered. This is a working prototype validated on one real project, not
-yet battle-tested across many — the agents are built to generalize (no
-project-specific logic baked in beyond documented, generic heuristics),
-but treat that as a design intent to verify against your own project, not
-a guarantee.
+yet thoroughly tested across many — the agents are built to generalize and
+simplify the migration, providing an overview of the entire project repo
+at once (no project-specific logic baked in beyond documented), but treat
+that as a design intent to verify against your own project, not a
+guarantee.
+
+## Acknowledgments
+
+[sfc-gh-dflippo/snowflake-dbt-demo](https://github.com/sfc-gh-dflippo/snowflake-dbt-demo)
+was used as the sample Snowflake+dbt project throughout this tool's
+development, from initial R&D through to completion.
 
 ## Requirements
 
