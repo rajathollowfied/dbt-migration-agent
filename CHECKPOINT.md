@@ -933,3 +933,9 @@ separate, not-yet-done cleanup.
 ## How to apply
 
 Whenever adding a new local file that might land at the `dbt-migration-agent/` root (scratch output, a new debug dump, a new credentials file), check `.dockerignore` covers it — don't assume a glob pattern written for one filename generalizes to a similarly-named one. For anything credential-shaped specifically, verify with `docker compose exec ... ls -la /app/` after a rebuild rather than trusting the ignore file's intent.
+
+## Tracked debug clutter moved into `trash/` (2026-09-17)
+
+The pre-agent manual-exploration artifacts flagged since the architecture-pivot plan (`run_errors_v2.txt`-`v10.txt`, `run_errors_raw.txt`, `compile_errors_raw.txt`, `deps_output.txt`, plus the stale root-level `dbt_run_report.xlsx` predating the Executor's own `reports/<run_id>.xlsx` output) moved into a new `dbt-migration-agent/trash/` folder rather than deleted outright, per user's explicit choice. `dbt_run_report.xlsx` stays gitignored (path updated in the root `.gitignore` to `dbt-migration-agent/trash/dbt_run_report.xlsx`); everything else is a normal tracked `git mv`.
+
+`.dockerignore`'s individual `run_errors_v*.txt` / `run_errors_raw.txt` / `compile_errors_raw.txt` / `deps_output.txt` / `dbt_run_report.xlsx` patterns collapsed into a single `trash/` directory exclude. Verified via rebuild + `docker compose exec migration-agent ls /app/trash` (no such directory) and `ls /app/` (only real source/config left) — no debug clutter reaches the image anymore, by construction rather than by enumerating filenames.
