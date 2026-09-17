@@ -574,7 +574,24 @@ class DiagnosticianAgent:
         changed_files = fix["apply"](self.project_path)
         status = f"changed: {', '.join(changed_files)}" if changed_files else "already applied, re-verifying"
 
+        # run_single_model() does a targeted `dbt run --select <model>`, which
+        # overwrites the WHOLE target/run_results.json with just that one
+        # model's result — same corruption risk already handled in run()'s own
+        # loop and in Validator, but apply_recommended_fix() is a standalone
+        # entry point (cli.py apply-fix), not called from run(), so it never
+        # got that same protection. Real bug found live (2026-09-17): running
+        # apply-fix for a second model right after a first one reported "not
+        # found among the last run's failures", because the first call's
+        # targeted run had already silently narrowed run_results.json down to
+        # just itself. Snapshot and restore, exactly like run()/Validator do.
+        run_results_path = self.project_path / "target" / "run_results.json"
+        original_run_results = run_results_path.read_text() if run_results_path.exists() else None
+
         ok, new_error = self.run_single_model(model_name)
+
+        if original_run_results is not None:
+            run_results_path.write_text(original_run_results)
+
         self.record_pattern(
             cat_name, f"APPLIED: {fix['title']} ({status})", "recommended_applied_by_user",
         )

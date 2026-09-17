@@ -57,17 +57,12 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY docker/install_morpheus.py .
 RUN python install_morpheus.py && rm install_morpheus.py
 
-# databricks-labs-blueprint's own logging setup (imported transitively the
-# first time any databricks.labs.lakebridge module loads) calls
-# find_project_root(), which walks up from the importing file looking for a
-# pyproject.toml/setup.py — present in the git-clone-based `databricks labs
-# install lakebridge` layout this library normally expects, but never
-# present for a plain `pip install`, which is what this image uses (see
-# above). Confirmed by a real crash: NotADirectoryError: Cannot find
-# project root, on the very first import. An empty pyproject.toml dropped
-# at the lakebridge package's own root satisfies that walk-up search
-# without needing to fake a real project structure.
-RUN touch /usr/local/lib/python3.12/site-packages/databricks/labs/lakebridge/pyproject.toml
+# The find_project_root() fix (databricks-labs-blueprint's logging setup
+# needs a walkable pyproject.toml/setup.py near the lakebridge package,
+# which a plain `pip install` doesn't provide) now self-heals in code —
+# see _ensure_lakebridge_importable() in agents/transpiler.py — rather than
+# being fixed here at build time. Handles any fresh environment (this image
+# rebuilt, or a plain local `pip install`), not just this one.
 
 # Generic dbt profile — no secrets baked in, every value resolves from the
 # container's own environment at dbt-run time. See the template's own header

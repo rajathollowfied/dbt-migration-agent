@@ -218,6 +218,34 @@ def find_dropped_ctes(raw_sql: str, lb_output: str) -> list[str]:
     return dropped
 
 
+def _ensure_lakebridge_importable() -> None:
+    """databricks.labs.blueprint's logging setup calls find_project_root() the
+    first time any databricks.labs.lakebridge submodule (e.g. .cli) is
+    imported — it walks up from the importing file looking for a
+    pyproject.toml/setup.py, present in the git-clone-based `databricks labs
+    install` layout this library normally expects, but not guaranteed for a
+    plain `pip install` (this project's own approach — see
+    docker/install_morpheus.py). A bare `import databricks.labs.lakebridge`
+    (this package's own __init__.py) does NOT trigger this — confirmed live
+    — so it's safe to import first just to locate the package directory.
+
+    Self-heals by dropping an empty pyproject.toml at the lakebridge
+    package's own root if nothing walkable already exists, rather than
+    depending on a Docker-build-time fix or an environment happening to
+    already have one lying around by chance (confirmed: local dev's own
+    working install only avoided this crash because of an unrelated stray
+    pyproject.toml already sitting in site-packages/ from a different
+    package — not a real guarantee for a fresh venv anywhere else).
+    """
+    import databricks.labs.lakebridge as lakebridge_pkg
+    from databricks.labs.blueprint.entrypoint import find_dir_with_leaf
+
+    pkg_dir = Path(lakebridge_pkg.__file__).resolve().parent
+    has_marker = find_dir_with_leaf(pkg_dir, "pyproject.toml") or find_dir_with_leaf(pkg_dir, "setup.py")
+    if not has_marker:
+        (pkg_dir / "pyproject.toml").touch()
+
+
 def run_lakebridge(input_dir: Path, output_dir: Path, profile: str | None, source_dialect: str = "snowflake") -> str:
     """Runs Lakebridge over the whole tree in one process, via its own Python
     API directly (databricks.labs.lakebridge.cli.transpile) rather than
@@ -262,6 +290,7 @@ def run_lakebridge(input_dir: Path, output_dir: Path, profile: str | None, sourc
     import io
     from contextlib import redirect_stderr, redirect_stdout
 
+    _ensure_lakebridge_importable()
     from databricks.labs.lakebridge.cli import transpile as lakebridge_transpile
     from databricks.labs.lakebridge.transpiler.repository import TranspilerRepository
     from databricks.sdk import WorkspaceClient
