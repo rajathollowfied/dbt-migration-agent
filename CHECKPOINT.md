@@ -884,3 +884,52 @@ Before building the next agent, re-read this file plus the relevant
 re-implementing SQL execution, audit DDL, or the workspace-copy step, and
 remember to regenerate `DBT_DATABRICKS_TOKEN` at the start of a fresh shell
 session.
+
+## `.dockerignore` gap — real `.env` credentials were being baked into the image
+
+User asked a direct sync-check question ("is Dockerfile basically the
+whole directory, including non-required files?") which prompted actually
+verifying `.dockerignore` via `docker compose exec ... ls -la /app/`
+rather than assuming it worked. Two real gaps found:
+
+1. **Serious**: `.env` (the real file, live Databricks token included) was
+   never excluded — `COPY . .` baked it straight into an image layer.
+   docker-compose does NOT mount `.env` into the container; compose only
+   reads it on the **host** for variable interpolation. Confirmed via
+   `docker compose exec migration-agent cat /app/.env` — the live token
+   was sitting in the image, owned `root:root` (not the bind-mount UID),
+   recoverable later via `docker history`/`docker save` even after the
+   token in the real `.env` is rotated. Directly undermines the "no
+   credentials baked into the image" design goal from the docker-compose
+   work. Fixed by adding `.env` to `.dockerignore`.
+2. **Minor**: `run_errors_raw.txt` (an old pre-agent debug artifact,
+   confirmed present in the built image) didn't match the
+   `run_errors_v*.txt` glob — no "v"/version number in that filename.
+   Added it explicitly.
+
+Verified the fix, not just applied it: rebuilt the image, confirmed
+`/app/.env`, `/app/run_errors_raw.txt`, `/app/compile_errors_raw.txt`,
+`/app/deps_output.txt`, `/app/run_errors_v2.txt` are all absent from the
+new container. Also removed the dangling pre-fix image (`docker history`
+confirmed its `COPY . .` layer was the leaking one) so the leaked-token
+layer isn't left sitting on disk.
+
+The bind-mounted dirs (`migration-workspace/`, `output_databricks/`,
+`reports/`) showing up in `ls -la /app/` are expected and fine — those
+come from `docker-compose.yml`'s `volumes:` at runtime (owned by the host
+UID), not from the image build; `.dockerignore` correctly keeps them out
+of the image itself.
+
+**Not yet done**: the token that leaked was likely already expired
+(~1hr TTL, and it had been sitting in the image since an earlier rebuild
+this session) but rotate it anyway next time regardless, since it was
+also echoed into this session's own tool output. Still open, unrelated:
+the tracked debug-clutter files themselves (`run_errors_v2.txt`-`v10.txt`,
+`compile_errors_raw.txt`, `deps_output.txt`, `run_errors_raw.txt`,
+`dbt_run_report.xlsx`) are excluded from the image now but still tracked
+in git at the repo root — deleting them from the repo entirely is a
+separate, not-yet-done cleanup.
+
+## How to apply
+
+Whenever adding a new local file that might land at the `dbt-migration-agent/` root (scratch output, a new debug dump, a new credentials file), check `.dockerignore` covers it — don't assume a glob pattern written for one filename generalizes to a similarly-named one. For anything credential-shaped specifically, verify with `docker compose exec ... ls -la /app/` after a rebuild rather than trusting the ignore file's intent.
