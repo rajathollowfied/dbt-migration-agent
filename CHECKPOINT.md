@@ -1435,3 +1435,106 @@ design, two narrow exceptions don't, and — per the README's own Status
 section — this has only been validated against one real project so far,
 so "should generalize" is a design intent to verify against a real
 different project, not a proven guarantee yet.
+
+## Two follow-ups from the audit-write investigation: refined the generalization answer, and root-caused `dim_calendar_day` down to its real remaining gaps (2026-09-18)
+
+**Point 2 refinement**: user restated the schema-generalization answer as
+"catalog needs those base folders created already" — corrected: schemas
+don't need pre-creating either. Confirmed this is standard dbt-core
+behavior (`create_schema()` macro, shared across virtually every adapter,
+not something this tool implements) — dbt auto-creates any missing schema
+its own `+schema:` config references, via `CREATE SCHEMA IF NOT EXISTS`,
+before materializing into it. Only the **catalog** needs to pre-exist
+(Unity Catalog catalog creation needs metastore-admin-level permissions,
+which is presumably why Preflight doesn't attempt it) — schemas are
+entirely automatic on both the tool's side (`REQUIRED_SCHEMAS`) and dbt's
+own side (anything else the project references).
+
+**Point 4 follow-up**: user shared the actual exported CSV from
+`model_runs`, which contradicted my earlier read that the audit write for
+this run had failed outright — it hadn't; `dim_calendar_day`'s "fail" row
+(run_id `a29c80ba...`, 18:25:24) genuinely was written. Queried the full
+history for this one model (43 rows total) to get the real story:
+
+1. **18:25** Executor: `fail`, `EXTRACT('dayofweekiso' FROM day_dt)` — the
+   original bug.
+2. **18:41** Diagnostician (after 3 retries): `error_category=unknown`,
+   `fix_successful=false`, `attempted_fix=llm_generated fix via
+   databricks-gpt-oss-120b`. The LLM's fix DID resolve the original
+   EXTRACT issue (confirmed: file now uses a `DAYOFWEEK`-based ISO-day
+   formula) but ran into a SECOND, distinct instance of the same bug
+   class it wasn't shown: `DATEDIFF('day', ...)`, also invalid on
+   Databricks (needs the unit unquoted). Audit trail was correct and
+   complete here — not a missing-write case, a genuinely-still-failing
+   fix.
+
+Root-caused this properly rather than stopping at "the LLM didn't finish."
+Checked Lakebridge's own pristine, untouched output for this file
+(`output_databricks/.../_lakebridge_raw_models/`) to separate genuine
+dialect gaps from LLM-introduced regressions, and found **the raw
+Lakebridge output has FOUR distinct issues stacked in this one file**:
+
+1. `ALTER SESSION SET WEEK_START/WEEK_OF_YEAR_POLICY` in `pre_hook` —
+   already handled by the existing `ALTER_SESSION_RE` fix.
+2. `EXTRACT(dayofweekiso FROM x)` — Snowflake's ISO-day-of-week EXTRACT
+   variant has no Databricks equivalent at all (invalid whether quoted or
+   bare — Lakebridge emits it BOTH ways inconsistently in the same file).
+   **New fix**: `EXTRACT_DAYOFWEEKISO_RE` → `((DAYOFWEEK(x) + 5) % 7) + 1`.
+   Verified the formula directly against the real warehouse for a known
+   Monday.
+3. `EXTRACT(weekiso FROM x)` — same problem, different field. **New
+   fix**: `EXTRACT_WEEKISO_RE` → `WEEKOFYEAR(x)`. Verified Databricks'
+   `WEEKOFYEAR()` matches true ISO-8601 week numbering exactly against
+   three real test dates including a year-boundary case (2020-12-31 /
+   2021-01-01 both correctly returning week 53 of 2020) — cross-checked
+   against Python's own `date.isocalendar()`, not assumed from docs.
+4. `EXTRACT(yearofweekiso FROM x)` — correctly NOT auto-fixed. Its value
+   genuinely differs from `YEAR(x)` at year boundaries (same 2020-12-31
+   example — that date's ISO year is 2020, not 2021), and a blind regex
+   can't compute this correctly. Added to `MANUAL_REWRITE_PATTERNS`
+   instead, matching the existing `GENERATOR()`/`seq4()` precedent.
+
+**A fifth, separate issue found once the first four were fixed and this
+file was actually run against the real warehouse**: Snowflake allows
+direct `date2 - date1` arithmetic (returns an integer day count);
+Databricks rejects it (`DATATYPE_MISMATCH`) and needs
+`DATEDIFF(day, date1, date2)` instead — this is the SAME underlying
+problem the LLM was reaching for with its (mis-quoted) `DATEDIFF('day',
+...)` attempt, just for a different original expression
+(`year_end_dt - year_start_dt + 1`, not literal Snowflake `DATEDIFF`).
+Asked the user how to handle this one specifically, since unlike the
+EXTRACT cases, a text-based regex fundamentally cannot distinguish date
+subtraction from ordinary numeric subtraction (e.g. `price - discount`) —
+user chose **flag for manual review, not auto-fix**. Added a narrow
+`..._dt - ..._dt` naming-convention pattern to `MANUAL_REWRITE_PATTERNS`
+(catches the common case, deliberately not a general "any subtraction"
+rule — false negatives on other naming conventions are an acceptable
+trade for zero risk of silently mis-fixing unrelated arithmetic).
+Confirmed no false positive against ordinary numeric subtraction.
+
+Verified the whole chain end-to-end against the real warehouse, not just
+unit-tested: applied `post_process()` to Lakebridge's pristine raw output,
+manually patched just the one remaining flagged `yearofweekiso` line
+(simulating a human review decision) to isolate whether everything ELSE
+was now correct, and ran `dbt run --select dim_calendar_day` for real —
+found the `date2 - date1` issue this way, which prompted the question
+above. Also fixed the separate `DATEDIFF('unit', ...)` quoting bug in the
+same session (this one just doesn't happen to trigger on Lakebridge's own
+raw output for this file — it appeared in the LLM's alternate rewrite —
+but is a real, generalizable fix already validated in isolation).
+
+This whole investigation started from the user directly checking
+`model_runs`, asking a clarifying question about a CSV export, and not
+accepting my first (subtly wrong) explanation — a good demonstration of
+why verifying against real exported data beats trusting a live query
+result assembled under time pressure.
+
+## How to apply
+
+When a "fix" only partially resolves a failure, don't stop at the first
+new error and assume the WHOLE remaining problem is one thing — check
+Lakebridge's own pristine raw output (`_lakebridge_raw_models/`,
+untouched by any post-processing or LLM patching) to see the FULL,
+undiluted set of dialect gaps in a file before deciding what's genuinely
+systemic (worth a Transpiler post-processing rule) versus a one-off
+LLM-introduced regression (not worth generalizing a fix for).

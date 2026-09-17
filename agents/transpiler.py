@@ -115,10 +115,51 @@ TABLESAMPLE_ALIAS_BEFORE_RE = re.compile(
 # 2026-09-14: customer_cdc_stream.sql's `SAMPLE(10)` survived transpilation
 # untouched). \b blocks matching "SAMPLE" inside "TABLESAMPLE" itself.
 BARE_SAMPLE_RE = re.compile(r"\bSAMPLE\s*\(\s*(\d+)\s*\)", re.IGNORECASE)
+# Snowflake's DATEDIFF accepts its unit argument quoted or bare; Lakebridge
+# carries the quoting straight through. Databricks' 3-arg DATEDIFF(unit, ...)
+# rejects a quoted unit outright (confirmed against the real warehouse:
+# INVALID_PARAMETER_VALUE.DATETIME_UNIT, "expects ... units without quotes" —
+# real failure found 2026-09-18: dim_calendar_day.sql's DATEDIFF('day', ...)
+# survived transpilation untouched, the same class of bug as the dayofweekiso
+# EXTRACT issue nearby but a distinct function/argument). Only strips quotes
+# around DATEDIFF's own first argument — DATE_TRUNC's format argument is a
+# real string literal on Databricks and must stay quoted, so this pattern is
+# deliberately DATEDIFF-specific, not a general "unquote date units" rule.
+DATEDIFF_QUOTED_UNIT_RE = re.compile(
+    r"\bDATEDIFF\s*\(\s*['\"](YEAR|QUARTER|MONTH|WEEK|DAY|DAYOFYEAR|HOUR|MINUTE|SECOND|MILLISECOND|MICROSECOND)['\"]\s*,",
+    re.IGNORECASE,
+)
+# Snowflake's EXTRACT() supports ISO-week field variants (dayofweekiso, weekiso,
+# yearofweekiso) that Databricks' EXTRACT() has no equivalent for at all --
+# invalid whether the field is quoted or bare (Lakebridge emits it both ways
+# inconsistently in the same file; neither works). Confirmed real failure
+# 2026-09-18: dim_calendar_day.sql's EXTRACT(dayofweekiso FROM ...). Two of the
+# three have safe, verified-against-the-real-warehouse Databricks equivalents;
+# yearofweekiso does NOT get one here (see MANUAL_REWRITE_PATTERNS below) --
+# its correct value can differ from YEAR(EXTRACT(year FROM x)) right at year
+# boundaries (e.g. 2020-12-31 and 2021-01-01 are both ISO week 53 of 2020),
+# and getting that subtly wrong via a blind regex is worse than a hard stop.
+EXTRACT_DAYOFWEEKISO_RE = re.compile(r"EXTRACT\s*\(\s*['\"]?dayofweekiso['\"]?\s+FROM\s+(\w+)\s*\)", re.IGNORECASE)
+EXTRACT_WEEKISO_RE = re.compile(r"EXTRACT\s*\(\s*['\"]?weekiso['\"]?\s+FROM\s+(\w+)\s*\)", re.IGNORECASE)
 # Patterns the post-processor deliberately does NOT auto-fix — the real fix (like
 # dim_calendar_day's) is a manual SQL rewrite, not a safe mechanical substitution.
 MANUAL_REWRITE_PATTERNS = [
     (re.compile(r"\bGENERATOR\s*\(|\bseq4\s*\(", re.IGNORECASE), "GENERATOR()/seq4() needs a manual explode(sequence()) rewrite"),
+    (re.compile(r"EXTRACT\s*\(\s*['\"]?yearofweekiso['\"]?\s+FROM", re.IGNORECASE),
+     "EXTRACT(yearofweekiso FROM x) has no safe mechanical Databricks equivalent -- "
+     "its correct value differs from YEAR(x) right at year boundaries (e.g. "
+     "2020-12-31 is ISO week 53 of 2020, not 2021) and needs a manual rewrite"),
+    # Snowflake allows direct DATE - DATE arithmetic (returns an integer day
+    # count); Databricks rejects it (DATATYPE_MISMATCH -- confirmed real
+    # failure 2026-09-18: dim_calendar_day.sql's `year_end_dt - year_start_dt`),
+    # needing DATEDIFF(day, a, b) instead. Deliberately NOT auto-fixed: a blind
+    # regex can't tell date subtraction from ordinary numeric subtraction (e.g.
+    # `price - discount`), so this only flags the common `..._dt - ..._dt`
+    # naming convention rather than guessing at every bare `x - y` in the file --
+    # narrower coverage, but zero risk of miscategorizing unrelated arithmetic.
+    (re.compile(r"\b\w+_dt\s*-\s*\w+_dt\b", re.IGNORECASE),
+     "date subtraction (a_dt - b_dt) needs DATEDIFF(day, a_dt, b_dt) instead -- "
+     "Databricks rejects direct DATE - DATE arithmetic that Snowflake allows"),
 ]
 
 
@@ -184,6 +225,20 @@ def post_process(sql: str) -> tuple[str, list[str]]:
         new_sql = BARE_SAMPLE_RE.sub(lambda m: f"TABLESAMPLE ({m.group(1)} PERCENT)", new_sql)
         fixes.append("SAMPLE(n) -> TABLESAMPLE (n PERCENT) (Snowflake's bare form is percent-based; "
                      "Databricks requires the TABLESAMPLE keyword)")
+
+    if DATEDIFF_QUOTED_UNIT_RE.search(new_sql):
+        new_sql = DATEDIFF_QUOTED_UNIT_RE.sub(lambda m: f"DATEDIFF({m.group(1)},", new_sql)
+        fixes.append("DATEDIFF('unit', ...) -> DATEDIFF(unit, ...) (Databricks rejects a quoted unit)")
+
+    if EXTRACT_DAYOFWEEKISO_RE.search(new_sql):
+        new_sql = EXTRACT_DAYOFWEEKISO_RE.sub(lambda m: f"(((DAYOFWEEK({m.group(1)}) + 5) % 7) + 1)", new_sql)
+        fixes.append("EXTRACT(dayofweekiso FROM x) -> ((DAYOFWEEK(x) + 5) % 7) + 1 "
+                     "(no Databricks EXTRACT equivalent; verified against the real warehouse)")
+
+    if EXTRACT_WEEKISO_RE.search(new_sql):
+        new_sql = EXTRACT_WEEKISO_RE.sub(lambda m: f"WEEKOFYEAR({m.group(1)})", new_sql)
+        fixes.append("EXTRACT(weekiso FROM x) -> WEEKOFYEAR(x) "
+                     "(Databricks' WEEKOFYEAR is already ISO-8601; verified against the real warehouse)")
 
     # Lakebridge always appends a trailing `;`. Harmless for a model that runs as
     # its own top-level statement, but a hard syntax error for an ephemeral model —
