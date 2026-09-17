@@ -1100,3 +1100,48 @@ exception instances, not just plausible-looking message text — this
 session hit two different exception shapes for what looked like "the same
 kind of failure" (a malformed token vs. a genuinely expired one), and a
 heuristic tuned against only one of them silently misses the other.
+
+## `SETUP.md` rewritten for the actual Docker/agent workflow (2026-09-17)
+
+Closed the last open item from the original distribution plan. The old
+`SETUP.md` documented the pre-agent manual exploration process — `git
+clone` the sample project, hand-run `sed` commands to patch
+`dbt_project.yml`, a "Known Issues" table of things to fix by hand, and a
+`databricks labs install lakebridge` step that's the abandoned ~1.25GB CLI
+flow. All of that is now either automated (Preflight/Macro Resolver) or
+simply wrong (the Lakebridge install path, the local-only credential var
+names, hardcoded references to this dev session's own workspace).
+
+Per user's request, kept the old version as a local-only reference rather
+than deleting it: `git mv SETUP.md SETUP.md.bak`, then `git rm --cached`
+to untrack it and added `dbt-migration-agent/SETUP.md.bak` to
+`.gitignore`. The content isn't lost — fully recoverable from git history
+at this commit — it just won't carry forward into future clones, matching
+the user's framing ("we remain aware... new one serves others").
+
+New `SETUP.md` is Docker-first (the actual supported path): prerequisites,
+`.env` setup table, `docker compose up -d --build`, then either the
+Streamlit UI or `docker compose exec migration-agent python scripts/cli.py
+<command> /data/project`. Explicitly documents what Preflight/Macro
+Resolver now do automatically instead of a manual-fixup checklist, points
+to `docker/refresh_token.sh` for the credential-refresh flow, and keeps a
+"Local development" section (only for contributing to the agents
+themselves) documenting the real difference from the Docker path — local
+dev's `~/.dbt/profiles.yml` uses a separate `DBT_DATABRICKS_TOKEN` var,
+unlike the image's unified single `DATABRICKS_TOKEN`.
+
+Verified against the actual current code before writing, not from memory:
+confirmed via `agents/preflight.py`'s `check_unity_catalog()` that
+Preflight auto-creates missing schemas under the catalog (only the catalog
+itself and the SQL Warehouse need to pre-exist — the old doc's "manually
+create 5 schemas in the UI" step was already stale); confirmed
+`docker/install_morpheus.py` has no location-dependent logic, so the
+documented local-dev command works identically to how the Dockerfile
+itself invokes it.
+
+This closes out the original distribution plan from the architecture-pivot
+entry: Docker + docker-compose, credential-refresh friction, `SETUP.md`,
+and tracked-clutter cleanup are all done. Remaining open items are the
+smaller ones noted along the way (Transpiler per-file resume for very
+large projects, deferred; Podman/Windows portability, unverified but
+expected to work).
