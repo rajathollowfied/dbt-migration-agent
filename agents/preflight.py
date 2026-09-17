@@ -291,9 +291,14 @@ class PreflightAgent:
             self.check_unity_catalog(),
             self.check_sql_warehouse(),
             self.check_audit_tables(),
-            self.check_dbt_debug(),
         ]
+        # Must run before check_dbt_debug(), not after -- dbt debug fails on
+        # a fresh/unfixed dbt_project.yml (wrong profile name, Snowflake-only
+        # config), so applying the fix too late meant a first run against an
+        # untouched project always reported NO-GO even though the fix it
+        # applied would have made a second run pass immediately.
         fixes = self.fix_dbt_project_yml()
+        checks.append(self.check_dbt_debug())
 
         go = all(c.status != "fail" for c in checks if c.blocking)
         return PreflightReport(go=go, checks=checks, dbt_project_yml_fixes=fixes)

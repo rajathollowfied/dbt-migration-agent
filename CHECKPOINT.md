@@ -1180,3 +1180,50 @@ branch stay in this monorepo for future updates — re-run the same
 
 No LICENSE file exists yet — worth adding before treating this as a real
 public release, not something to default silently on.
+
+## Real bug found by the user's own fresh-clone test: `check_dbt_debug()` ran before `fix_dbt_project_yml()` (2026-09-17)
+
+User did exactly the right validation — cloned this repo AND the sample
+project fresh (not reusing this dev machine's already-fixed local state)
+and followed `SETUP.md`/`README.md` like a new user would. Preflight
+reported NO-GO on the first run, GO immediately on a second run with no
+code/config change in between — a real, user-caught bug, not a fluke.
+
+Root cause (in `agents/preflight.py`'s `run()`): `checks = [...,
+self.check_dbt_debug()]` is a list literal, so `check_dbt_debug()` gets
+called and its result computed *before* `fixes = self.fix_dbt_project_yml()`
+even runs, despite appearing to read top-to-bottom as "checks, then fix."
+Against a genuinely fresh project (`profile: "SNOWFLAKE"` still in
+`dbt_project.yml`), `dbt debug` legitimately fails on that first
+invocation — the fix that would have made it pass gets applied
+*afterward*, too late to help that run's own GO/NO-GO. A second
+invocation then sees the already-fixed file and passes immediately. This
+is exactly why every previous test of this project (always run against an
+already-migrated-workspace-copy or already-fixed source) never surfaced
+it — it only shows up on a truly first-ever run against an untouched
+project, which is precisely what a fresh clone forces.
+
+Fixed by moving `fix_dbt_project_yml()` to run before `check_dbt_debug()`
+is constructed (`checks.append(self.check_dbt_debug())` after the fix,
+instead of inline in the list literal) — one-line reorder, no logic
+change. Verified properly, not just re-read the diff: cloned
+`snowflake-dbt-demo` fresh into a scratch dir (confirmed `profile:
+"SNOWFLAKE"` still present), ran `cli.py preflight ... --reset-workspace`
+once with real credentials — fixes applied AND `dbt_debug` passed AND
+GO, all in the same single invocation. Repeated inside the actual
+rebuilt container too (cloned fresh inside it, same result) before
+calling this done.
+
+## How to apply
+
+A pipeline of "checks + fixes" needs the fix to run before anything that
+depends on its result, even when the code visually reads top-to-bottom —
+a Python list literal's elements are evaluated during construction, not
+lazily, so `[check_a(), fix(), check_b()]` really does call `check_a()`
+before `fix()` regardless of how the list is later used. This is exactly
+the kind of ordering bug that only surfaces on a genuinely fresh
+first-ever run, which is why testing against an already-migrated
+workspace copy (the norm during active development, since re-running is
+faster) can hide it indefinitely — a real argument for periodically
+testing against a truly fresh clone, not just trusting a rerun of local
+state.
