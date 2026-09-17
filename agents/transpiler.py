@@ -525,7 +525,7 @@ class TranspilerAgent:
         try:
             self.write_audit(results, run_id)
         except (StatementError, DatabricksError) as e:
-            print(f"[warn] could not write to audit table: {e}", file=sys.stderr)
+            print(f"[warn] could not write to audit table: {e}")
 
         compile_ok, tail = self.run_dbt_compile()
 

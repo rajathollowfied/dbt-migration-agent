@@ -131,7 +131,7 @@ class PipelineRunTracker:
         try:
             execute_sql(self.client, self.warehouse_id, stmt, catalog=self.catalog, schema="audit")
         except StatementError as e:
-            print(f"[warn] could not write pipeline_runs start: {e}", file=sys.stderr)
+            print(f"[warn] could not write pipeline_runs start: {e}")
 
     def finish(self, start_time: datetime, summary: dict, status: str) -> None:
         end_time = datetime.now(timezone.utc)
@@ -159,7 +159,7 @@ class PipelineRunTracker:
         try:
             execute_sql(self.client, self.warehouse_id, stmt, catalog=self.catalog, schema="audit")
         except StatementError as e:
-            print(f"[warn] could not write pipeline_runs completion: {e}", file=sys.stderr)
+            print(f"[warn] could not write pipeline_runs completion: {e}")
 
 
 def run_full_pipeline(args: argparse.Namespace) -> int:
@@ -306,6 +306,31 @@ def fetch_status(client, catalog: str, warehouse_id: str):
         catalog=catalog,
     )
     return latest_pipeline_run, review_queue
+
+
+def fetch_pending_recommendations(client, catalog: str, warehouse_id: str):
+    """Every model whose latest run still has a Diagnostician recommendation
+    that hasn't been applied yet -- shared by app.py's Apply Fix tab so its
+    description isn't hardcoded to whichever RECOMMENDED_FIXES category
+    happened to exist when that text was written (see diagnostician.py's
+    RECOMMENDED_FIXES registry -- this reflects whatever's actually in there
+    now, model-by-model, straight from the audit trail).
+    """
+    from agents.common.db import execute_sql as _exec
+
+    return _exec(
+        client, warehouse_id,
+        f"""
+        SELECT model_name, error_category, attempted_fix FROM (
+            SELECT model_name, error_category, attempted_fix,
+                   ROW_NUMBER() OVER (PARTITION BY model_name ORDER BY run_timestamp DESC) AS rn
+            FROM {catalog}.audit.model_runs
+        ) WHERE rn = 1 AND attempted_fix LIKE 'RECOMMENDED (not applied):%'
+        ORDER BY model_name
+        LIMIT 20
+        """,
+        catalog=catalog,
+    )
 
 
 def run_status(args: argparse.Namespace) -> int:

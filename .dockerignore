@@ -16,9 +16,6 @@ __pycache__/
 # would embed a live token in a permanent, inspectable image layer.
 .env
 
-# Pre-agent manual-exploration debug artifacts, not part of the tool.
-trash/
-
 # Project docs -- for developers reading the repo, not read by any agent at
 # runtime (confirmed: no code opens/reads a .md file). No reason to ship
 # them in the image.

@@ -556,7 +556,7 @@ class DiagnosticianAgent:
             )
             execute_sql(self.client, self.warehouse_id, stmt, catalog=self.catalog, schema="audit")
         except (StatementError, DatabricksError) as e:
-            print(f"[warn] could not write pattern_library: {e}", file=sys.stderr)
+            print(f"[warn] could not write pattern_library: {e}")
 
     def apply_recommended_fix(self, model_name: str) -> tuple[bool, str]:
         """Explicit, user-triggered counterpart to the advisory recommendation
@@ -649,7 +649,7 @@ class DiagnosticianAgent:
         try:
             self.write_audit(results, run_id)
         except (StatementError, DatabricksError) as e:
-            print(f"[warn] could not write to audit table: {e}", file=sys.stderr)
+            print(f"[warn] could not write to audit table: {e}")
 
         return DiagnosticianReport(run_id=run_id, results=results)
 

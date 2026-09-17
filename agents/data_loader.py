@@ -486,7 +486,7 @@ class DataLoaderAgent:
         try:
             self.write_audit(all_results)
         except (StatementError, DatabricksError) as e:
-            print(f"[warn] could not write to audit table: {e}", file=sys.stderr)
+            print(f"[warn] could not write to audit table: {e}")
 
         return DataLoaderReport(results=all_results, yml_redirects=all_yml_fixes)
 

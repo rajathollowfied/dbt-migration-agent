@@ -1292,3 +1292,146 @@ has three separate, non-overlapping output surfaces
 step only, the workspace copy under `migration-workspace/` = everything
 else, including Diagnostician's `apply-fix`) and a user (reasonably)
 expects one unified "where did my change go" answer.
+
+## Major finding: silent audit-write failures across EVERY agent, invisible in the UI — found while investigating "expected fixes didn't go through" (2026-09-18)
+
+User's clean fresh-clone run (in a genuinely separate directory,
+`agenticAI/dbt-migration-agent`) surfaced a real, systemic bug, but first
+a real environmental mistake on my part had to be untangled.
+
+**Port-collision misdiagnosis first**: user's screenshots (full pipeline
+run, the applied `stream_error` fix) didn't match what their own
+`agenticAI/` workspace showed on disk (Preflight's fix present, nothing
+else). Root cause: both directories' `docker-compose.yml` map to the same
+host port (`8501:8501`), and MY OWN container had been continuously
+running/rebuilding throughout this whole session in parallel with the
+user's own testing — Docker can't bind two containers to the same host
+port, so whichever container came up last silently "won" that port, with
+no visible warning to a browser tab already connected. The user's
+screenshots were almost certainly showing *my* container's data. Stopped
+mine (`docker compose down`) so the user's own container could own the
+port cleanly for a real, uncontaminated test.
+
+**The real bug, found once testing was clean**: user re-ran the pipeline
+successfully in their own environment and asked why `model_runs` didn't
+reflect expected fixes for `dim_orders`/`dim_calendar_day`. Investigation:
+- `dim_orders`: local `target/run_results.json` showed `status: success`
+  — it built fine. Zero rows in `model_runs` for it anywhere, ever.
+- `dim_calendar_day`: local `run_results.json` showed a genuine NEW
+  failure — `[PARSE_SYNTAX_ERROR] Syntax error at or near 'EXTRACT'` from
+  `EXTRACT('dayofweekiso' FROM day_dt)` (Databricks' `EXTRACT()` needs a
+  bare field identifier, not a quoted string — `EXTRACT(month FROM ...)`
+  a few lines later in the same query works fine). But the CURRENT source
+  file already shows a corrected `((DAYOFWEEK(x) + 5) % 7) + 1` ISO-day
+  formula instead — meaning Diagnostician's LLM fallback had already
+  fixed the real problem. Zero rows in `model_runs` for this model either.
+- `dbt_migration.audit.model_runs`'s overall last-write timestamp was
+  from HOURS before this run even happened, despite a real Excel report
+  (`reports/*.xlsx`) and real `output_databricks/` content proving
+  Executor/Transpiler genuinely ran and produced real local output.
+
+Root cause, confirmed directly in code: `executor.py`'s `run()` (and the
+identical pattern in `diagnostician.py`, plus `analyzer.py`,
+`validator.py`, `data_loader.py`, `macro_resolver.py`, `scripts/cli.py`'s
+`pipeline_runs` writes — **10 occurrences total, one per audit-writing
+agent**) wraps its audit INSERT in `except (StatementError,
+DatabricksError): print(f"[warn] ...", file=sys.stderr)` — a deliberate
+"don't let an audit-write hiccup kill the whole run" design (reasonable
+on its own), but with two compounding problems: (1) it's a single bulk
+multi-row INSERT per call, so ONE failure silently drops the ENTIRE
+batch's audit trail, not just the offending row; (2) the warning printed
+to `stderr` specifically, and `scripts/app.py`'s `run_with_live_log()`
+only ever redirected `sys.stdout` into the UI's log capture — so this
+warning was invisible in the Streamlit UI *by construction*, no matter
+how long you stared at the log panel. Confirmed via a direct test
+(deliberately invalid `warehouse_id`, simulating the exact
+`except (StatementError, DatabricksError)` path executor.py actually
+uses): the warning silently vanished under the old code, appeared
+correctly once fixed.
+
+**Fixed both halves**: all 10 occurrences changed from
+`print(..., file=sys.stderr)` to plain `print(...)`, matching how every
+other progress message in this codebase already prints (respects
+whatever `sys.stdout` currently is, redirected or not). Additionally,
+`run_with_live_log()` now redirects `sys.stderr` into the same writer too
+(defense-in-depth — any future or library-originated stderr output is
+now visible in the UI log, not just these specific known warnings, not
+just this one instance). Verified the fix directly: the same deliberate-
+failure test now shows the warning correctly captured through the exact
+mechanism `app.py` uses.
+
+**Not fixed (deliberately, scope decision)**: the underlying
+"one bulk INSERT failing drops the whole batch" behavior itself — still
+true, still worth reconsidering (e.g., retry once, or fall back to
+per-row inserts) if this turns out to matter again. For now, the fix that
+directly addresses what actually confused the user (a real success/fix
+looking like nothing happened) is landed; the deeper resilience question
+is a separate, not-yet-decided piece of scope.
+
+## Apply Fix tab description no longer hardcodes `stream_error` (2026-09-18)
+
+User's ask: stop hardcoding `stream_error` in the tab's static text, and
+surface the actual current advice from the audit trail instead — the
+underlying data (the full recommendation text) was already being written
+to `model_runs.attempted_fix` by `diagnose_one()` for any
+`RECOMMENDED_FIXES` category (confirmed via code, not assumed), so this
+was purely a UI-side gap, not a missing audit-table feature.
+
+Added `fetch_pending_recommendations()` to `scripts/cli.py` (same file,
+same dedup pattern as the existing `fetch_status()`/review-queue query —
+`ROW_NUMBER() OVER (PARTITION BY model_name ...)` to get each model's
+latest row, filtered to `attempted_fix LIKE 'RECOMMENDED (not applied):%'`
+in the outer query so a model's advice only shows if that's still its
+*current* status, not a stale earlier row). `app.py`'s Apply Fix tab
+description no longer names any specific category; a new
+"Show pending recommendations" button queries and displays whatever's
+actually pending right now, model by model. Automatically stays accurate
+as more `RECOMMENDED_FIXES` entries get added later — no more UI text to
+update by hand. Verified against real data (correctly showed the pending
+`customer_cdc_stream` / `stream_error` recommendation) and via `AppTest`.
+
+## `trash/` deleted from the repo (2026-09-18)
+
+User's earlier "shouldn't be in the repo" observation, now with explicit
+go-ahead: `git rm -r` on all 12 tracked files, removed the now-stale
+`.dockerignore`/`.gitignore` entries referencing it (the folder itself is
+gone, nothing left to exclude).
+
+## Generalization check: does this hold up for a different project's model/catalog layout? (2026-09-18)
+
+User asked directly, given not every project shares this sample's layout.
+Checked the actual code rather than asserting:
+- **Genuinely generic**: Analyzer's model "layer" is derived from dbt's
+  own manifest FQN (`node["fqn"][1]`, i.e. whatever the model's own
+  folder structure under `models/` happens to be) — not a hardcoded
+  bronze/silver/gold assumption. Macro classification, the 19-pattern
+  Snowflake-dialect scanner, Diagnostician's error-category regexes, and
+  the `RECOMMENDED_FIXES` framework all operate on pattern-matching
+  against dbt/SQL content generically, not this project's specific names.
+- **A convenience, not a requirement**: Preflight's `REQUIRED_SCHEMAS`
+  (`landing`/`bronze`/`silver`/`gold`/`audit`) only pre-creates those 5
+  schema names for convenience — only `audit` is actually load-bearing
+  (the tool's own tables live there). A project using different
+  schema/layer names never touches this list at all; dbt-databricks
+  creates whatever schemas the project's OWN config references,
+  regardless.
+- **Two genuinely narrow, sample-project-specific carve-outs, found by
+  grep, not assumed absent**: (1) Data Loader's `KNOWN_TPCH_TABLES` +
+  `SNOWFLAKE_SAMPLE_DATA.TPCH*` redirect is TPC-H-specific — a different
+  project without this exact source simply falls through to the generic
+  live-Snowflake-copy path, doesn't break. (2) Diagnostician's
+  `apply_stream_cdf_pattern()` hardcodes one literal file path,
+  `models/bronze/run/customer_cdc_stream.sql` — because that ONE model in
+  THIS project hand-rolls its own Snowflake stream DDL instead of calling
+  the `get_stream()` macro like every other stream-based model does. The
+  generic mechanism (rewriting the `get_stream()` macro's dispatch to use
+  Delta CDF) works for any project's models that correctly use the macro;
+  this one hardcoded exception exists only for a model that bypasses it
+  entirely, and wouldn't automatically catch an equivalent bypass pattern
+  in someone else's differently-named file.
+
+Answered the user directly with this: the core mechanisms generalize by
+design, two narrow exceptions don't, and — per the README's own Status
+section — this has only been validated against one real project so far,
+so "should generalize" is a design intent to verify against a real
+different project, not a proven guarantee yet.

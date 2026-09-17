@@ -298,7 +298,7 @@ class ValidatorAgent:
         try:
             self.write_audit(results)
         except (StatementError, DatabricksError) as e:
-            print(f"[warn] could not write to audit table: {e}", file=sys.stderr)
+            print(f"[warn] could not write to audit table: {e}")
 
         return results
 

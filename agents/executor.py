@@ -269,7 +269,7 @@ class ExecutorAgent:
         try:
             self.write_audit(results, run_id)
         except (StatementError, DatabricksError) as e:
-            print(f"[warn] could not write to audit table: {e}", file=sys.stderr)
+            print(f"[warn] could not write to audit table: {e}")
 
         return ExecutorReport(
             run_id=run_id, dbt_run_ok=dbt_run_ok and dbt_snapshot_ok, results=results,

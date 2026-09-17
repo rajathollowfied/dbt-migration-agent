@@ -847,7 +847,7 @@ class MacroResolverAgent:
         try:
             self.write_audit(macro_resolutions)
         except (StatementError, DatabricksError) as e:
-            print(f"[warn] could not write to audit table: {e}", file=sys.stderr)
+            print(f"[warn] could not write to audit table: {e}")
 
         deps_ok, compile_ok, tail = self.run_dbt_deps_and_compile()
 

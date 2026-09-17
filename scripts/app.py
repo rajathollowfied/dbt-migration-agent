@@ -134,12 +134,18 @@ def run_with_live_log(fn, *fn_args, placeholder, session_key: str, log_name: str
     safe_log_name = re.sub(r"[^A-Za-z0-9_-]", "_", log_name)  # log_name can come from free-text input (e.g. model_name) -- keep it a safe filename component
     log_file = LOG_DIR / f"{safe_log_name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
     writer = _StreamlitLogWriter(placeholder, session_key, log_file)
-    old_stdout = sys.stdout
+    old_stdout, old_stderr = sys.stdout, sys.stderr
     sys.stdout = writer
+    sys.stderr = writer  # defense-in-depth: every agent's own audit-write warnings already
+    # print via plain print() now (fixed 2026-09-18 -- they used to print(..., file=sys.stderr),
+    # invisible here since only stdout was captured), but redirecting stderr too means any
+    # future or library-originated stderr output shows up in the UI log as well, not just
+    # in a terminal nobody's watching.
     try:
         return fn(*fn_args, **fn_kwargs)
     finally:
         sys.stdout = old_stdout
+        sys.stderr = old_stderr
         writer.close()
 
 
@@ -197,11 +203,25 @@ with tab_agents:
 
 with tab_fix:
     st.write(
-        "Applies a Diagnostician *recommendation* for a hard-stop category with a real, "
-        "tested fix (currently: `stream_error`, the Snowflake Streams -> Delta CDF redesign) "
-        "that was surfaced but not auto-applied. Run Diagnose first so there's a "
-        "recommendation to apply — see CHECKPOINT.md 'Advisory-then-apply workflow'."
+        "Applies a Diagnostician *recommendation* — a hard-stop category with a real, "
+        "tested fix that was surfaced but not auto-applied (see `RECOMMENDED_FIXES` in "
+        "`agents/diagnostician.py`, and CHECKPOINT.md 'Advisory-then-apply workflow'). "
+        "Run Diagnose first so there's a recommendation to apply."
     )
+    if st.button("Show pending recommendations", disabled=not warehouse_id):
+        try:
+            client = get_client(profile or None)
+            pending = cli.fetch_pending_recommendations(client, catalog, warehouse_id)
+        except Exception as e:
+            st.error(f"Could not fetch pending recommendations: {e}")
+        else:
+            if pending.rows:
+                st.dataframe(
+                    [dict(zip(pending.columns, row)) for row in pending.rows],
+                    width="stretch",
+                )
+            else:
+                st.write("(none right now — nothing currently has an unapplied recommendation)")
     model_name = st.text_input("Model name")
     log_placeholder = render_persistent_log("log_apply_fix")
     if st.button("Apply fix", disabled=not (project_path and model_name)):
