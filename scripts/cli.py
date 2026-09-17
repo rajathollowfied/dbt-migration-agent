@@ -45,6 +45,12 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
+# cli.py lives in scripts/, but agents/ is a sibling of scripts/'s parent —
+# put the project root back on sys.path (normally the executed script's own
+# directory gets this slot automatically, which no longer points at the
+# right place once this file isn't at the project root).
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
 from agents.analyzer import AnalyzerAgent
 from agents.common.config import DEFAULT_CATALOG, DEFAULT_PROFILE, DEFAULT_WAREHOUSE_ID
 from agents.common.db import StatementError, execute_sql, get_client
@@ -86,7 +92,7 @@ HELP_TEXT = """dbt Migration Agent — commands
 
 Every command takes a project_path plus the shared flags (--profile,
 --catalog, --warehouse-id, --dbt-target, --developer, --reset-workspace).
-Run `python cli.py <command> --help` for a command's own flags.
+Run `python scripts/cli.py <command> --help` for a command's own flags.
 """
 
 

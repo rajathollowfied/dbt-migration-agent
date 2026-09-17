@@ -3,7 +3,7 @@ wraps (run_full_pipeline / run_agent_command / run_apply_fix / fetch_status).
 No orchestration logic lives here; every button below calls straight into
 cli.py, with stdout captured live into the page instead of a terminal.
 
-Run locally with: streamlit run app.py
+Run locally with: streamlit run scripts/app.py
 Self-hosted, no Databricks Apps dependency — see CHECKPOINT.md "Deferred
 bundle/UI work" for why (2026-09-15 architecture decision: agents run
 external to Databricks, which stays backend-only).
@@ -15,10 +15,21 @@ import argparse
 import io
 import os
 import sys
+from pathlib import Path
+
+# app.py lives in scripts/, but agents/ is a sibling of scripts/'s parent —
+# see the matching comment in scripts/cli.py.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import streamlit as st
 
-import cli
+# Package-qualified, not `import cli` -- Streamlit's script runner doesn't
+# reliably put this file's own directory on sys.path the way a plain
+# `python3 scripts/app.py` would, and a bare `cli` module name risks
+# resolving to an unrelated package elsewhere on sys.path (confirmed this
+# actually happens in a shared dev venv with another project's own `cli`
+# package installed).
+import scripts.cli as cli
 from agents.common.config import DEFAULT_CATALOG, DEFAULT_PROFILE, DEFAULT_WAREHOUSE_ID
 from agents.common.db import get_client
 

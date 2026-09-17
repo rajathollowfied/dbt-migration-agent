@@ -934,6 +934,61 @@ separate, not-yet-done cleanup.
 
 Whenever adding a new local file that might land at the `dbt-migration-agent/` root (scratch output, a new debug dump, a new credentials file), check `.dockerignore` covers it — don't assume a glob pattern written for one filename generalizes to a similarly-named one. For anything credential-shaped specifically, verify with `docker compose exec ... ls -la /app/` after a rebuild rather than trusting the ignore file's intent.
 
+## `app.py`/`cli.py` moved into `scripts/` (2026-09-17)
+
+User asked to move both entry-point files into `scripts/` (already home to
+`dbt_report.py`) to reduce root clutter, with an explicit "skip it if too
+much rework" out. It was moderate, not trivial: both files relied on the
+project root being on `sys.path`, which happens automatically today only
+because they sit AT the project root (Python auto-adds the executed
+script's own directory). `git mv`'d both, then:
+- Added `sys.path.insert(0, <project root>)` near the top of both files
+  (before their `agents.*` imports) so `from agents.xxx import ...` keeps
+  resolving once they're one level deeper.
+- **Real bug caught by testing, not by inspection**: `app.py`'s `import cli`
+  broke under `streamlit run`/`AppTest` — Streamlit's script runner doesn't
+  reliably put the script's own directory on `sys.path` the way a plain
+  `python3 scripts/app.py` does, so the bare name `cli` fell through to an
+  unrelated `cli` package from a completely different project
+  (`learn_airflow/cli/`) that happens to be on this shared dev venv's
+  `sys.path` via an old editable-install `.pth` file. Confirmed directly
+  (`python3 -c "import cli; print(cli.__file__)"` from this directory
+  resolved to the wrong file). Fixed by using `import scripts.cli as cli`
+  instead of a bare `import cli` — package-qualified, can't collide.
+- Updated the two real runtime references: Dockerfile's `ENTRYPOINT`
+  (`scripts/app.py`) and `docker-compose.yml`'s comment
+  (`python scripts/cli.py ...`), plus `cli.py`'s own `--help` text which
+  self-referenced its old path.
+
+Verified via the same "local first, then Docker" order already established
+for this project, not just that it imports cleanly:
+1. Local: `python3 scripts/cli.py help` succeeds; a real
+   `streamlit.testing.v1.AppTest` run of `scripts/app.py` shows zero
+   exceptions and all 4 tabs (this is what caught the `import cli` bug
+   above — a plain `python3 scripts/app.py` smoke test would have missed
+   it, since that execution path doesn't hit the same `sys.path` gap).
+2. Docker: rebuilt, `curl localhost:8501` → 200 via the Dockerfile's real
+   `ENTRYPOINT`, and `docker compose exec migration-agent python
+   scripts/cli.py help` succeeds inside the actual container.
+Removed the dangling pre-move image afterward, same cleanup habit as the
+`.env` fix above.
+
+Left conceptual/historical mentions of `cli.py` alone in AGENT_DESIGN.md
+(diagram), OPEN_ITEMS.md (decision log), MACRO_ANALYSIS.md (narrative
+reference) — these name the router as a concept, not a literal runnable
+command, and per `CLAUDE.md` AGENT_DESIGN.md is historical intent already,
+not a living doc that needs to track file moves.
+
+## How to apply
+
+Any bare same-directory import in a file that can run under multiple
+different launchers (`python3 file.py`, `streamlit run file.py`, a test
+harness like `AppTest`) is not guaranteed to resolve the same way across
+all of them — don't trust "it imports fine when I run it directly" as
+proof; test it through the SAME launcher the file is actually meant to run
+under in production (here, that's what caught the wrong-`cli`-package bug,
+which a plain `python3 scripts/app.py` invocation wouldn't have surfaced).
+
 ## Tracked debug clutter moved into `trash/` (2026-09-17)
 
 The pre-agent manual-exploration artifacts flagged since the architecture-pivot plan (`run_errors_v2.txt`-`v10.txt`, `run_errors_raw.txt`, `compile_errors_raw.txt`, `deps_output.txt`, plus the stale root-level `dbt_run_report.xlsx` predating the Executor's own `reports/<run_id>.xlsx` output) moved into a new `dbt-migration-agent/trash/` folder rather than deleted outright, per user's explicit choice. `dbt_run_report.xlsx` stays gitignored (path updated in the root `.gitignore` to `dbt-migration-agent/trash/dbt_run_report.xlsx`); everything else is a normal tracked `git mv`.

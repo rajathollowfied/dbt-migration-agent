@@ -73,4 +73,4 @@ COPY docker/profiles.yml.template /root/.dbt/profiles.yml
 COPY . .
 
 EXPOSE 8501
-ENTRYPOINT ["streamlit", "run", "app.py", "--server.address=0.0.0.0"]
+ENTRYPOINT ["streamlit", "run", "scripts/app.py", "--server.address=0.0.0.0"]

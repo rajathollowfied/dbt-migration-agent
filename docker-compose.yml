@@ -1,6 +1,6 @@
 # One service (2026-09-15 decision) -- app.py already calls straight into
 # cli.py's own functions in-process, so pure-CLI usage doesn't need a
-# separate service: `docker compose exec migration-agent python cli.py ...`
+# separate service: `docker compose exec migration-agent python scripts/cli.py ...`
 # runs any agent inside this same container.
 #
 # Runs as root (2026-09-15 decision) -- files this container writes into the
