@@ -197,7 +197,7 @@ def run_full_pipeline(args: argparse.Namespace) -> int:
     print(f"  {len(macro_report.macro_resolutions)} macros processed ✓")
 
     print("Agent 3/8 — Data Loader...")
-    data_loader = DataLoaderAgent(**common)
+    data_loader = DataLoaderAgent(**common, enabled=not args.skip_data_loader)
     load_report = data_loader.run()
     print(f"  {len(load_report.results)} source tables processed (soft fail per table, continuing)")
 
@@ -365,6 +365,12 @@ def main() -> int:
         p.add_argument("--dbt-target", default="dev")
         p.add_argument("--developer", default=None, help="defaults to 'unknown' if omitted")
         p.add_argument("--reset-workspace", action="store_true")
+        p.add_argument(
+            "--skip-data-loader", action="store_true",
+            help="Skip Data Loader entirely -- you own loading your own data and making "
+                 "_sources.yml resolve correctly (default: on, auto-redirects known native "
+                 "datasets like Snowflake's TPC-H sample data)",
+        )
 
     run_p = sub.add_parser("run", help="Full pipeline, Preflight through Validator")
     add_common(run_p)

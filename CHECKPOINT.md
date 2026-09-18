@@ -1538,3 +1538,61 @@ untouched by any post-processing or LLM patching) to see the FULL,
 undiluted set of dialect gaps in a file before deciding what's genuinely
 systemic (worth a Transpiler post-processing rule) versus a one-off
 LLM-introduced regression (not worth generalizing a fix for).
+
+## Data Loader made fully optional (2026-09-18)
+
+User's follow-up on the TPC-H fallback-heuristic false-positive risk
+flagged earlier: rather than trying to make the heuristic bulletproof,
+make the whole agent skippable — a user with their own data source
+doesn't need the tool guessing at their table names at all. Confirmed
+scope with the user first: disabling skips Data Loader *entirely* (no
+redirect, no unused-source reporting, no live-Snowflake-copy attempt) —
+not just gating the risky heuristic.
+
+Default stays **on** (current auto-redirect behavior unchanged) — this is
+an opt-out, not opt-in, matching the user's own framing ("inform of the
+default behaviour").
+
+`DataLoaderAgent` gained an `enabled: bool = True` constructor arg;
+`run()` short-circuits immediately when `False` — no `get_client()` call,
+no Databricks connection at all, just a clear message and an empty
+report. Explicitly documented the real tradeoff in both the docstring and
+the message itself: disabling doesn't just mean "skip loading data" — it
+means `_sources.yml` is left completely untouched, so **the user owns the
+whole source-resolution story**, not just moving bytes. Every model's
+`source()` call will fail at Executor time unless their data already
+resolves under whatever database/schema `_sources.yml` currently
+declares, or they edit it themselves first.
+
+Wired through three places: `agents/data_loader.py`'s own `--skip-data-loader`
+CLI flag (for the standalone `cli.py load` command), `scripts/cli.py`'s
+shared `add_common()` (so the full `cli.py run` pipeline respects it too —
+`enabled=not args.skip_data_loader` at the one call site that constructs
+`DataLoaderAgent`), and a new "Enable Data Loader" sidebar checkbox in
+`app.py` (defaults checked, full explanation of the tradeoff in the help
+text) wired into both `build_args()` (full pipeline) and the Individual
+Agents tab's `argv` construction (only appended when `load` is the
+selected agent — other agents don't have this flag).
+
+Verified properly, not just read the diff: confirmed `enabled=False`
+needs zero Databricks credentials at all (unset every relevant env var,
+ran it directly — succeeded); confirmed both CLI flags parse correctly
+(`cli.py load --help` / `cli.py run --help`) and the argparse-generated
+attribute name (`args.skip_data_loader`) matches what the code
+references; ran the real end-to-end path via `cli.run_agent_command('load',
+[..., '--skip-data-loader'])` — correct "0 tables processed" output,
+`rc=0`; confirmed inside the rebuilt container too. The Streamlit
+`AppTest` UI-level test hit a harness timeout unrelated to this feature
+(the checkbox itself already rendered/toggled correctly in an earlier
+successful `AppTest` run, and the underlying code path was independently
+verified as fast and correct via the direct `run_agent_command` call —
+treated as an AppTest tooling artifact, not investigated further).
+
+## How to apply
+
+When a heuristic has a real false-positive risk for other projects but is
+genuinely useful for the common case, "make it more precise" isn't always
+the right fix — "make it skippable, default-on, with the tradeoff clearly
+stated" can be the more honest design, especially when the alternative
+(hand-tuning ever-narrower detection rules) just shifts the risk to
+different edge cases rather than eliminating it.

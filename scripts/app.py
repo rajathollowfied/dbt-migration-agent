@@ -63,6 +63,16 @@ with st.sidebar:
         "Reset workspace copy", value=False,
         help="Discards the cached migration-workspace copy and re-copies from project_path",
     )
+    enable_data_loader = st.checkbox(
+        "Enable Data Loader", value=True,
+        help="Default: auto-redirects known native datasets (e.g. Snowflake's built-in "
+             "TPC-H sample data) to their Databricks equivalent, and attempts a live "
+             "Snowflake copy otherwise. Disable this if you have your own source data — "
+             "but then YOU own making _sources.yml resolve correctly, since it's left "
+             "untouched: every model's source() call fails at Executor time unless your "
+             "data already resolves under whatever database/schema _sources.yml declares, "
+             "or you edit it yourself first.",
+    )
 
     if not warehouse_id:
         st.warning("No SQL Warehouse ID set — every action below will fail until one is provided.")
@@ -73,6 +83,7 @@ def build_args(**overrides) -> argparse.Namespace:
         project_path=project_path, profile=profile or None, catalog=catalog,
         warehouse_id=warehouse_id or None, dbt_target=dbt_target,
         developer=developer or None, reset_workspace=reset_workspace, max_retries=int(max_retries),
+        skip_data_loader=not enable_data_loader,
     )
     base.update(overrides)
     return argparse.Namespace(**base)
@@ -187,6 +198,8 @@ with tab_agents:
             argv += ["--developer", developer]
         if reset_workspace:
             argv.append("--reset-workspace")
+        if agent_choice == "load" and not enable_data_loader:
+            argv.append("--skip-data-loader")
         with st.status(f"Running {agent_choice}...", expanded=True) as status_box:
             try:
                 rc = run_with_live_log(

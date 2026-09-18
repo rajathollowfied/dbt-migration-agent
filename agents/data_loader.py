@@ -331,6 +331,7 @@ class DataLoaderAgent:
         batch_size: int = DEFAULT_BATCH_SIZE,
         apply_yml_fixes: bool = True,
         reset_workspace: bool = False,
+        enabled: bool = True,
     ):
         self.source_path = Path(project_path).resolve()
         self.project_path = ensure_workspace_copy(self.source_path, reset=reset_workspace)
@@ -339,6 +340,15 @@ class DataLoaderAgent:
         self.warehouse_id = warehouse_id
         self.batch_size = batch_size
         self.apply_yml_fixes = apply_yml_fixes
+        # Default ON: auto-redirects known native datasets (e.g. Snowflake's
+        # built-in TPC-H sample data -> Databricks' samples.tpch) and attempts
+        # a live Snowflake copy otherwise. A user with their own data source
+        # can disable this entirely -- but doing so means THEY own the whole
+        # source-resolution story: _sources.yml keeps its original Snowflake-
+        # shaped database/schema untouched, so every model's source() call
+        # will fail at Executor time unless their data already resolves under
+        # those same names in Databricks, or they edit _sources.yml themselves.
+        self.enabled = enabled
         self.client: WorkspaceClient | None = None
 
     def _samples_schemas(self) -> set[str]:
@@ -465,6 +475,13 @@ class DataLoaderAgent:
         execute_sql(self.client, self.warehouse_id, stmt, catalog=self.catalog, schema="audit")
 
     def run(self) -> DataLoaderReport:
+        if not self.enabled:
+            print("Data Loader disabled by user -- skipping entirely. _sources.yml is "
+                  "left untouched; make sure your own data already resolves under "
+                  "whatever database/schema _sources.yml currently declares, or edit "
+                  "it yourself, before Executor runs.")
+            return DataLoaderReport(results=[], yml_redirects={})
+
         self.client = get_client(self.profile)
         samples_schemas = self._samples_schemas()
 
@@ -500,6 +517,11 @@ def main() -> int:
     parser.add_argument("--batch-size", type=int, default=DEFAULT_BATCH_SIZE)
     parser.add_argument("--no-yml-fixes", action="store_true")
     parser.add_argument("--reset-workspace", action="store_true")
+    parser.add_argument(
+        "--skip-data-loader", action="store_true",
+        help="Skip Data Loader entirely -- you own loading your own data and making "
+             "_sources.yml resolve correctly (see class docstring / --help for the tradeoff)",
+    )
     parser.add_argument("--json", action="store_true")
     args = parser.parse_args()
 
@@ -507,6 +529,7 @@ def main() -> int:
         project_path=args.project_path, profile=args.profile, catalog=args.catalog,
         warehouse_id=args.warehouse_id, batch_size=args.batch_size,
         apply_yml_fixes=not args.no_yml_fixes, reset_workspace=args.reset_workspace,
+        enabled=not args.skip_data_loader,
     )
     report = agent.run()
 
